@@ -406,7 +406,7 @@ func (r *Runner) registerInTreePlugins() {
 
 func (r *Runner) parseConfigurationPhaseOne(ctx context.Context, opts *runserver.Options) (*configapi.EndpointPickerConfig, error) {
 	if opts.ConfigText == "" && opts.ConfigFile == "" {
-		return nil, nil // configuring through code, not through file
+		return nil, nil // validation of required flags should catch this.
 	}
 
 	logger := log.FromContext(ctx)

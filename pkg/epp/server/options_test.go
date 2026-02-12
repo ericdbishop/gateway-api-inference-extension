@@ -87,7 +87,7 @@ func TestEndpointTargetPorts(t *testing.T) {
 			opts := NewOptions()
 			opts.AddFlags(tt.fs)
 
-			argv := []string{"--endpoint-selector", "app=vllm"}
+			argv := []string{"--endpoint-selector", "app=vllm", "--config-file", "default-config.yaml"}
 			argv = append(argv, tt.args...)
 
 			if err := tt.fs.Parse(argv); err != nil {
