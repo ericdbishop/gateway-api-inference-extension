@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	gwhttp "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/http"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
 	"sigs.k8s.io/gateway-api/pkg/features"
 
@@ -65,8 +66,8 @@ var InferencePoolResolvedRefsCondition = suite.ConformanceTest{
 
 		inferenceTimeoutConfig := config.DefaultInferenceExtensionTimeoutConfig()
 
-		k8sutils.HTTPRouteMustBeAcceptedAndResolved(t, s.Client, s.TimeoutConfig, httpRoutePrimaryNN, gatewayPrimaryNN)
-		k8sutils.HTTPRouteMustBeAcceptedAndResolved(t, s.Client, s.TimeoutConfig, httpRouteSecondaryNN, gatewaySecondaryNN)
+		gatewayk8sutils.HTTPRouteMustBeAcceptedAndResolved(t, s.Client, s.TimeoutConfig, httpRoutePrimaryNN, gatewayPrimaryNN)
+		gatewayk8sutils.HTTPRouteMustBeAcceptedAndResolved(t, s.Client, s.TimeoutConfig, httpRouteSecondaryNN, gatewaySecondaryNN)
 
 		gwPrimaryAddr := k8sutils.GetGatewayEndpoint(t, s.Client, s.TimeoutConfig, gatewayPrimaryNN)
 		gwSecondaryAddr := k8sutils.GetGatewayEndpoint(t, s.Client, s.TimeoutConfig, gatewaySecondaryNN)
