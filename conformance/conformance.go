@@ -289,7 +289,7 @@ func ensureGatewayAvailableAndReady(ctx context.Context, t *testing.T, k8sClient
 	t.Helper()
 
 	logDebugf(t, opts.Debug, "Waiting for shared Gateway %s/%s to be ready", gatewayNN.Namespace, gatewayNN.Name)
-	gatewayk8utils.GatewayMustHaveCondition(t, k8sClient, opts.TimeoutConfig, gatewayNN, gatewayk8utils.GetGatewayReadyCondition())
+	gatewayk8utils.GatewayMustHaveCondition(t, k8sClient, opts.TimeoutConfig, gatewayNN, gatewayk8utils.GetGatewayAcceptedCondition())
 	gatewayk8utils.GatewayMustHaveCondition(t, k8sClient, opts.TimeoutConfig, gatewayNN, gatewayk8utils.GetGatewayProgrammedCondition())
 
 	_, err := gatewayk8utils.WaitForGatewayAddress(t, k8sClient, opts.TimeoutConfig, gatewayk8utils.NewGatewayRef(gatewayNN))
