@@ -26,7 +26,7 @@ metadata:
   name: conformance-primary
   namespace: inference-conformance-infra
 spec:
-  gatewayClassName: "{GATEWAY_CLASS_NAME}"
+  gatewayClassName: "istio"
   listeners:
   - name: http
     port: 80
@@ -44,7 +44,7 @@ metadata:
   name: conformance-secondary
   namespace: inference-conformance-infra
 spec:
-  gatewayClassName: "{GATEWAY_CLASS_NAME}"
+  gatewayClassName: "istio"
   listeners:
   - name: http
     port: 80

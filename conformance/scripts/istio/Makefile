@@ -1,10 +1,16 @@
 # Version variables - can be overridden via environment or command line
 # Example: make all ISTIO_VERSION=1.28.0
-GATEWAY_API_VERSION ?= v1.3.0
-INFERENCE_EXTENSION_VERSION ?= v0.4.0
-ISTIO_VERSION ?= 1.27-alpha.0551127f00634403cddd4634567e65a8ecc499a7
-ISTIO_HUB ?=
-ISTIO_PROFILE ?= minimal
+GATEWAY_API_VERSION ?= v1.4.1
+INFERENCE_EXTENSION_VERSION ?= v1.3.0
+ISTIO_VERSION ?= 1.29.1
+ISTIO_PROFILE ?= ambient
+
+# Local registry configuration
+LOCAL_REGISTRY ?= localhost:5000
+ISTIO_HUB ?= $(LOCAL_REGISTRY)
+PROXY_IMAGE ?= localhost:5000/proxyv2:1.29.1-distroless
+ISTIO_SOURCE_HUB ?=
+ISTIO_IMAGES ?= pilot proxyv2 ztunnel install-cni
 
 # Conformance test variables
 IMPLEMENTATION_VERSION ?= $(ISTIO_VERSION)
@@ -23,7 +29,7 @@ TEST_BASE_DIR ?= ../../..
 REPORT_BASE_DIR ?= ../../reports/$(INFERENCE_EXTENSION_VERSION)/$(PROFILE)/$(PROJECT)
 
 # Kubernetes version (shared between kind and minikube)
-KUBERNETES_VERSION ?= v1.30.13
+KUBERNETES_VERSION ?= v1.34.3
 
 # Internal variables (derived from KUBERNETES_VERSION)
 KIND_NODE_IMAGE ?= kindest/node:$(KUBERNETES_VERSION)
@@ -91,6 +97,18 @@ spec:
       tls:
         mode: SIMPLE
         insecureSkipVerify: true
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: dp-endpoint-picker-tls
+  namespace: inference-conformance-app-backend
+spec:
+  host: dp-endpoint-picker-svc
+  trafficPolicy:
+      tls:
+        mode: SIMPLE
+        insecureSkipVerify: true
 endef
 
 # README template for implementation conformance reports
@@ -119,7 +137,7 @@ For instructions on how to reproduce these test results and run the conformance 
 For detailed information about conformance testing, report generation, and requirements, see the [main conformance README](../../../../../README.md).
 endef
 
-.PHONY: setup-env-minikube setup-env-kind setup-env-openshift setup-minikube setup-kind setup-openshift setup-istio setup-istio-minikube setup-istio-kind setup-istio-openshift setup-gateway-api-crds setup-inference-extension-crds setup-crds setup-tls run-tests readme-update clean clean-reports help ensure-report-dir
+.PHONY: setup-env-minikube setup-env-kind setup-env-openshift setup-minikube setup-kind setup-openshift setup-istio setup-istio-minikube setup-istio-kind setup-istio-openshift setup-gateway-api-crds setup-inference-extension-crds setup-crds setup-tls run-tests readme-update clean clean-reports help ensure-report-dir mirror-istio-images
 
 # Setup complete environment with minikube
 setup-env-minikube: setup-minikube setup-istio-minikube setup-gateway-api-crds setup-inference-extension-crds setup-tls
@@ -163,6 +181,7 @@ help:
 	@echo "⚙️  COMMON SETUP - Environment-agnostic targets"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 	@echo "  setup-istio                      - Install Istio (auto-downloads istioctl)"
+	@echo "  mirror-istio-images              - Mirror Istio images to local registry"
 	@echo "  setup-gateway-api-crds           - Install Gateway API CRDs"
 	@echo "  setup-inference-extension-crds   - Install Inference Extension CRDs"
 	@echo "  setup-crds                       - Install all CRDs"
@@ -185,6 +204,8 @@ help:
 	@echo "  INFERENCE_EXTENSION_VERSION      - Inference Extension version (current: $(INFERENCE_EXTENSION_VERSION))"
 	@echo "  KUBERNETES_VERSION               - Kubernetes version for kind/minikube (current: $(KUBERNETES_VERSION))"
 	@echo "  ISTIO_VERSION                    - Istio version (current: $(ISTIO_VERSION))"
+	@echo "  LOCAL_REGISTRY                   - Local container registry (current: $(LOCAL_REGISTRY))"
+	@echo "  PROXY_IMAGE                      - Custom proxy image name override (current: $(PROXY_IMAGE))"
 	@echo "  PROFILE                          - Conformance profile (current: $(PROFILE))"
 	@echo "  PROJECT                          - Project name (current: $(PROJECT))"
 	@echo ""
@@ -194,10 +215,9 @@ help:
 	@echo ""
 	@echo "📥 Automatic istioctl Management:"
 	@echo "  • istioctl binary will be automatically downloaded based on ISTIO_VERSION"
-	@echo "  • Hub (container registry) will be auto-detected from download source:"
-	@echo "    - GitHub release → gcr.io/istio-release"
-	@echo "    - Container extraction → gcr.io/istio-testing"
-	@echo "  • Override with ISTIO_HUB if needed for custom registries"
+	@echo "  • ISTIO_HUB defaults to LOCAL_REGISTRY ($(LOCAL_REGISTRY))"
+	@echo "  • Use 'make mirror-istio-images' to copy images from remote to local registry"
+	@echo "  • Override ISTIO_HUB for a different registry, or PROXY_IMAGE for a custom proxy"
 	@echo ""
 	@echo "Conformance test variables (can be overridden):"
 	@echo "  MODE                             - Test mode (current: $(MODE))"
@@ -209,7 +229,9 @@ help:
 	@echo ""
 	@echo "Internal variables (advanced users only):"
 	@echo "  IMPLEMENTATION_VERSION           - Implementation version for report (current: $(IMPLEMENTATION_VERSION), derived from ISTIO_VERSION)"
-	@echo "  ISTIO_HUB                        - Istio container registry hub (current: $(ISTIO_HUB), auto-detected if empty)"
+	@echo "  ISTIO_HUB                        - Istio container registry hub (current: $(ISTIO_HUB), defaults to LOCAL_REGISTRY)"
+	@echo "  ISTIO_SOURCE_HUB                 - Remote source registry for mirroring (current: $(ISTIO_SOURCE_HUB), auto-detected if empty)"
+	@echo "  ISTIO_IMAGES                     - Istio images to mirror (current: $(ISTIO_IMAGES))"
 	@echo "  ISTIO_PROFILE                    - Istio profile (current: $(ISTIO_PROFILE))"
 	@echo "  TEST_BASE_DIR                    - Test suite base directory (current: $(TEST_BASE_DIR))"
 	@echo "  REPORT_BASE_DIR                  - Report output directory (current: $(REPORT_BASE_DIR))"
@@ -246,6 +268,9 @@ help:
 	@echo "⚙️  Common Setup Examples:"
 	@echo "  make setup-istio ISTIO_PROFILE=openshift   - Install Istio with specific profile"
 	@echo "  make setup-istio ISTIO_HUB=docker.io/istio - Install Istio from custom registry"
+	@echo "  make setup-istio PROXY_IMAGE=my-proxy      - Install Istio with custom proxy image"
+	@echo "  make mirror-istio-images                   - Mirror Istio images to local registry"
+	@echo "  make mirror-istio-images LOCAL_REGISTRY=myregistry:5000 - Mirror to custom registry"
 	@echo "  make setup-crds                            - Install all CRDs"
 	@echo ""
 	@echo "🧪 Testing Examples:"
@@ -272,7 +297,11 @@ setup-minikube:
 	@MINIKUBE_IP=$$(minikube ip); \
 	NETWORK_PREFIX=$${MINIKUBE_IP%.*}; \
 	echo "Using IP range: $${NETWORK_PREFIX}.100-$${NETWORK_PREFIX}.200"; \
-	sed -i "s/NETWORK_PREFIX/$${NETWORK_PREFIX}/g" /tmp/metallb-config.yaml
+	if [ "$$(uname -s)" = "Darwin" ]; then \
+		sed -i '' "s/NETWORK_PREFIX/$${NETWORK_PREFIX}/g" /tmp/metallb-config.yaml; \
+	else \
+		sed -i "s/NETWORK_PREFIX/$${NETWORK_PREFIX}/g" /tmp/metallb-config.yaml; \
+	fi; \
 	kubectl apply -f /tmp/metallb-config.yaml
 	@rm -f /tmp/metallb-config.yaml
 
@@ -293,10 +322,14 @@ setup-kind:
 	kubectl wait --namespace metallb-system --for=condition=ready pod --selector=component=speaker --timeout=90s
 	@echo "Configuring metallb address pool..."
 	$(file >/tmp/metallb-kind-config.yaml,$(METALLB_KIND_CONFIG))
-	@DOCKER_NETWORK=$$(docker network inspect -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' kind); \
+	@DOCKER_NETWORK=$$(docker network inspect -f '{{(index .IPAM.Config 1).Gateway}}' kind); \
 	NETWORK_PREFIX=$${DOCKER_NETWORK%.*}; \
 	echo "Using IP range: $${NETWORK_PREFIX}.200-$${NETWORK_PREFIX}.250"; \
-	sed -i "s/NETWORK_PREFIX/$${NETWORK_PREFIX}/g" /tmp/metallb-kind-config.yaml
+	if [ "$$(uname -s)" = "Darwin" ]; then \
+		sed -i '' "s/NETWORK_PREFIX/$${NETWORK_PREFIX}/g" /tmp/metallb-kind-config.yaml; \
+	else \
+		sed -i "s/NETWORK_PREFIX/$${NETWORK_PREFIX}/g" /tmp/metallb-kind-config.yaml; \
+	fi; \
 	kubectl apply -f /tmp/metallb-kind-config.yaml
 	@rm -f /tmp/metallb-kind-config.yaml
 
@@ -314,6 +347,9 @@ $(ISTIOCTL_BIN):
 	@mkdir -p $(ISTIOCTL_DIR)
 	@OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
 	ARCH=$$(uname -m); \
+	case "$$OS" in \
+		darwin) OS=osx;; \
+	esac; \
 	case "$$ARCH" in \
 		x86_64) ARCH=amd64 ;; \
 		aarch64) ARCH=arm64 ;; \
@@ -401,19 +437,59 @@ setup-istio: $(ISTIOCTL_BIN)
 		echo "If this is incorrect, specify ISTIO_HUB manually"; \
 	fi; \
 	echo "Installing Istio from $$HUB..."; \
-	$(ISTIOCTL_BIN) install -y --set profile=$(ISTIO_PROFILE) --set values.global.hub=$$HUB --set values.global.tag=$(ISTIO_VERSION) --set values.pilot.env.SUPPORT_GATEWAY_API_INFERENCE_EXTENSION=true --set values.pilot.env.ENABLE_GATEWAY_API_INFERENCE_EXTENSION=true
+	PROXY_OVERRIDE=""; \
+	if [ -n "$(PROXY_IMAGE)" ]; then \
+		PROXY_OVERRIDE="--set values.global.proxy.image=$(PROXY_IMAGE)"; \
+		echo "Using custom proxy image: $(PROXY_IMAGE)"; \
+	fi; \
+	$(ISTIOCTL_BIN) install -y --set profile=$(ISTIO_PROFILE) --set values.global.hub=$$HUB --set values.global.tag=$(ISTIO_VERSION) --set values.pilot.env.SUPPORT_GATEWAY_API_INFERENCE_EXTENSION=true --set values.pilot.env.ENABLE_GATEWAY_API_INFERENCE_EXTENSION=true $$PROXY_OVERRIDE
 
 # Install Istio for minikube environment
 setup-istio-minikube:
-	$(MAKE) setup-istio ISTIO_PROFILE=minimal
+	$(MAKE) setup-istio ISTIO_PROFILE=$(ISTIO_PROFILE)
 
 # Install Istio for kind environment
 setup-istio-kind:
-	$(MAKE) setup-istio ISTIO_PROFILE=minimal
+	$(MAKE) setup-istio ISTIO_PROFILE=$(ISTIO_PROFILE)
 
 # Install Istio for OpenShift environment
 setup-istio-openshift:
 	$(MAKE) setup-istio ISTIO_PROFILE=openshift
+
+# Mirror Istio images from remote registry to local registry
+mirror-istio-images: $(ISTIOCTL_BIN)
+	@if [ -n "$(ISTIO_SOURCE_HUB)" ]; then \
+		SRC_HUB="$(ISTIO_SOURCE_HUB)"; \
+		echo "Using specified source hub: $$SRC_HUB"; \
+	elif [ -f "$(ISTIOCTL_BIN).source" ]; then \
+		SOURCE=$$(cat $(ISTIOCTL_BIN).source); \
+		if [ "$$SOURCE" = "github" ]; then \
+			SRC_HUB="gcr.io/istio-release"; \
+			echo "Using source hub for GitHub release: $$SRC_HUB"; \
+		elif [ "$$SOURCE" = "container" ]; then \
+			SRC_HUB="gcr.io/istio-testing"; \
+			echo "Using source hub for container image: $$SRC_HUB"; \
+		else \
+			SRC_HUB="gcr.io/istio-testing"; \
+			echo "Unknown source, defaulting to testing hub: $$SRC_HUB"; \
+		fi; \
+	else \
+		SRC_HUB="gcr.io/istio-release"; \
+		echo "No source detected, defaulting to release hub: $$SRC_HUB"; \
+	fi; \
+	echo "Mirroring Istio $(ISTIO_VERSION) images from $$SRC_HUB to $(LOCAL_REGISTRY)..."; \
+	echo "Images: $(ISTIO_IMAGES)"; \
+	for IMAGE in $(ISTIO_IMAGES); do \
+		echo "Copying $$SRC_HUB/$$IMAGE:$(ISTIO_VERSION) -> $(LOCAL_REGISTRY)/$$IMAGE:$(ISTIO_VERSION)"; \
+		if command -v crane >/dev/null 2>&1; then \
+			crane copy "$$SRC_HUB/$$IMAGE:$(ISTIO_VERSION)" "$(LOCAL_REGISTRY)/$$IMAGE:$(ISTIO_VERSION)"; \
+		else \
+			docker pull "$$SRC_HUB/$$IMAGE:$(ISTIO_VERSION)" && \
+			docker tag "$$SRC_HUB/$$IMAGE:$(ISTIO_VERSION)" "$(LOCAL_REGISTRY)/$$IMAGE:$(ISTIO_VERSION)" && \
+			docker push "$(LOCAL_REGISTRY)/$$IMAGE:$(ISTIO_VERSION)"; \
+		fi; \
+	done; \
+	echo "All images mirrored to $(LOCAL_REGISTRY) successfully!"
 
 # Apply Gateway API CRDs
 setup-gateway-api-crds:
@@ -423,7 +499,7 @@ setup-gateway-api-crds:
 # Apply Inference Extension CRDs
 setup-inference-extension-crds:
 	@echo "Applying Inference Extension CRDs version $(INFERENCE_EXTENSION_VERSION)..."
-	kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/gateway-api-inference-extension/refs/tags/$(INFERENCE_EXTENSION_VERSION)/config/crd/bases/inference.networking.x-k8s.io_inferencepools.yaml
+	kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/gateway-api-inference-extension/refs/tags/$(INFERENCE_EXTENSION_VERSION)/config/crd/bases/inference.networking.k8s.io_inferencepools.yaml
 	kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/gateway-api-inference-extension/refs/tags/$(INFERENCE_EXTENSION_VERSION)/config/crd/bases/inference.networking.x-k8s.io_inferenceobjectives.yaml
 
 # Apply all CRDs (convenience target)

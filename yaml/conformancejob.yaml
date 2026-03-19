@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    kubernetes.io/metadata.name: conformance-runner
+  name: conformance-runner
+spec:
+  finalizers:
+  - kubernetes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: conformance-default-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: conformance-runner
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gaie-gw-destination-endpoint-served
+  namespace: conformance-runner
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300   # optional; for debugging you can comment this out
+  template:
+    metadata:
+      labels:
+        job: gaie-gw-destination-endpoint-served
+    spec:
+      serviceAccountName: default
+      restartPolicy: Never
+      containers:
+        - name: conformance
+          image: gaie-conformance-build:local
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+
+              /work/conformance.test \
+                -gateway-class istio \
+                -cleanup-base-resources false \
+                -organization istio \
+                -project istio \
+                -url https://istio.io \
+                -contact "@istio/maintainers" \
+                -version "1.28.3" \
+                -mode default \
+
+              echo "[entrypoint] list outputs at /work/reports:"
+              ls -lah /work/ || true
+
+              echo "[entrypoint] sleeping 600s so you can kubectl cp the report..."

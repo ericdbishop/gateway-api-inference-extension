@@ -1,0 +1,20 @@
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY . .
+RUN go test -c ./conformance -o /out/conformance.test
+
+FROM debian:bookworm-slim
+# Make the container filesystem look like repo root
+WORKDIR /work
+
+# Copy the compiled test binary
+COPY --from=build /out/conformance.test /work/conformance.test
+
+# Copy the manifests (and anything else under conformance the binary may read)
+COPY --from=build /src/conformance /work/conformance
+
+# (Optional) If the binary loads any other relative assets later, you can copy more:
+# COPY --from=build /src/<some-dir> /work/<some-dir>
+
+ENTRYPOINT ["/work/conformance.test"]
+
