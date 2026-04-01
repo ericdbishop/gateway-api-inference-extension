@@ -50,14 +50,15 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/tests"
 	inferenceconfig "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/config"
-	"sigs.k8s.io/gateway-api-inference-extension/version"
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
+	"sigs.k8s.io/gateway-api-inference-extension/version"
 )
 
 // GatewayLayerProfileName defines the name for the conformance profile that tests
 // the Gateway API layer aspects of the Inference Extension (e.g., InferencePool, InferenceObjective CRDs).
 // Future profiles will cover EPP and ModelServer layers.
 const GatewayLayerProfileName confsuite.ConformanceProfileName = "Gateway"
+
 var GatewayLayerProfile = confsuite.ConformanceProfile{
 	Name:         GatewayLayerProfileName,
 	CoreFeatures: features.InferenceCoreFeatures,

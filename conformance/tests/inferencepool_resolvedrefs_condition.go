@@ -32,8 +32,8 @@ import (
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/config"
-	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
+	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 )
 
 func init() {

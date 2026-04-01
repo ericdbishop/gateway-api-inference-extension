@@ -27,10 +27,10 @@ import (
 	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
+	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/requestcontrol/test"
 	testscheduling "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/test"
-	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 )
 
 func init() {
