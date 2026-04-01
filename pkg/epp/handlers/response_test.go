@@ -26,6 +26,7 @@ import (
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/logging"
 	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 	fwkrq "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/requestcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/requesthandling/parsers/openai"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metadata"
 )
 
@@ -53,6 +54,40 @@ const (
 		}
 	}
 	`
+
+	bodyWithoutUsage = `
+	{
+		"id": "cmpl-573498d260f2423f9e42817bbba3743a",
+		"object": "text_completion",
+		"created": 1732563765,
+		"model": "meta-llama/Llama-3.1-8B-Instruct",
+		"choices": [
+			{
+				"index": 0,
+				"text": " Chronicle\nThe San Francisco Chronicle has a new book review section, and it's a good one. The reviews are short, but they're well-written and well-informed. The Chronicle's book review section is a good place to start if you're looking for a good book review.\nThe Chronicle's book review section is a good place to start if you're looking for a good book review. The Chronicle's book review section",
+				"logprobs": null,
+				"finish_reason": "length",
+				"stop_reason": null,
+				"prompt_logprobs": null
+			}
+		]
+	}
+	`
+
+	bodyInvalidJSON = `
+	{
+		"id": "cmpl-573498d260f2423f9e42817bbba3743a",
+		"object": "text_completion",
+		"created": 1732563765,
+		"model": "meta-llama/Llama-3.1-8B-Instruct",
+		"choices": [
+			{
+				"invalid json"
+			}
+		]
+	}
+	`
+
 	bodyWithCachedTokens = `
 	{
 		"id": "cmpl-573498d260f2423f9e42817bbba3743a",
@@ -93,17 +128,11 @@ data: [DONE]
 
 type mockDirector struct{}
 
-func (m *mockDirector) HandleResponseBodyStreaming(ctx context.Context, reqCtx *RequestContext) (*RequestContext, error) {
-	return reqCtx, nil
+func (m *mockDirector) HandleResponseBody(ctx context.Context, reqCtx *RequestContext, endOfStream bool) *RequestContext {
+	return reqCtx
 }
-func (m *mockDirector) HandleResponseBodyComplete(ctx context.Context, reqCtx *RequestContext) (*RequestContext, error) {
-	return reqCtx, nil
-}
-func (m *mockDirector) HandleResponseReceived(ctx context.Context, reqCtx *RequestContext) (*RequestContext, error) {
-	return reqCtx, nil
-}
-func (m *mockDirector) HandlePreRequest(ctx context.Context, reqCtx *RequestContext) (*RequestContext, error) {
-	return reqCtx, nil
+func (m *mockDirector) HandleResponseHeader(ctx context.Context, reqCtx *RequestContext) *RequestContext {
+	return reqCtx
 }
 func (m *mockDirector) GetRandomEndpoint() *fwkdl.EndpointMetadata {
 	return &fwkdl.EndpointMetadata{}
@@ -116,11 +145,10 @@ func TestHandleResponseBody(t *testing.T) {
 	ctx := logutil.NewTestLoggerIntoContext(context.Background())
 
 	tests := []struct {
-		name    string
-		body    []byte
-		reqCtx  *RequestContext
-		want    fwkrq.Usage
-		wantErr bool
+		name   string
+		body   []byte
+		reqCtx *RequestContext
+		want   fwkrq.Usage
 	}{
 		{
 			name: "success",
@@ -143,24 +171,31 @@ func TestHandleResponseBody(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "success body without usage, the HandleResponseBody should still return non-nil error",
+			body: []byte(bodyWithoutUsage),
+			want: fwkrq.Usage{}, // Since the usage is not set in the responseBody, this usage should be empty.
+		},
+		{
+			name: "success invalid joson body, the HandleResponseBody should still return non-nil error",
+			body: []byte(bodyInvalidJSON),
+			want: fwkrq.Usage{}, // Since the response is invalid json, the usage cannot be extrcated.
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := &StreamingServer{}
+			server := &StreamingServer{
+				parser: openai.NewOpenAIParser(),
+			}
 			server.director = &mockDirector{}
 			reqCtx := test.reqCtx
 			if reqCtx == nil {
-				reqCtx = &RequestContext{}
-			}
-			_, err := server.HandleResponseBody(ctx, reqCtx, test.body)
-			if err != nil {
-				if !test.wantErr {
-					t.Fatalf("HandleResponseBody returned unexpected error: %v, want %v", err, test.wantErr)
+				reqCtx = &RequestContext{
+					Response: &Response{},
 				}
-				return
 			}
-
+			server.HandleResponseBody(ctx, reqCtx, test.body, true)
 			if diff := cmp.Diff(test.want, reqCtx.Usage); diff != "" {
 				t.Errorf("HandleResponseBody returned unexpected response, diff(-want, +got): %v", diff)
 			}
@@ -173,25 +208,18 @@ func TestHandleStreamedResponseBody(t *testing.T) {
 	tests := []struct {
 		name    string
 		body    []byte
-		reqCtx  *RequestContext
 		want    fwkrq.Usage
 		wantErr bool
 	}{
 		{
-			name: "streaming request without usage",
-			body: []byte(streamingBodyWithoutUsage),
-			reqCtx: &RequestContext{
-				modelServerStreaming: true,
-			},
+			name:    "streaming request without usage",
+			body:    []byte(streamingBodyWithoutUsage),
 			wantErr: false,
 			// In the middle of streaming response, so request context response is not set yet.
 		},
 		{
-			name: "streaming request with usage",
-			body: []byte(streamingBodyWithUsage),
-			reqCtx: &RequestContext{
-				modelServerStreaming: true,
-			},
+			name:    "streaming request with usage",
+			body:    []byte(streamingBodyWithUsage),
 			wantErr: false,
 			want: fwkrq.Usage{
 				PromptTokens:     7,
@@ -200,11 +228,8 @@ func TestHandleStreamedResponseBody(t *testing.T) {
 			},
 		},
 		{
-			name: "streaming request with usage and cached tokens",
-			body: []byte(streamingBodyWithUsageAndCachedTokens),
-			reqCtx: &RequestContext{
-				modelServerStreaming: true,
-			},
+			name:    "streaming request with usage and cached tokens",
+			body:    []byte(streamingBodyWithUsageAndCachedTokens),
 			wantErr: false,
 			want: fwkrq.Usage{
 				PromptTokens:     7,
@@ -219,13 +244,18 @@ func TestHandleStreamedResponseBody(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := &StreamingServer{}
-			server.director = &mockDirector{}
-			reqCtx := test.reqCtx
-			if reqCtx == nil {
-				reqCtx = &RequestContext{}
+			server := &StreamingServer{
+				parser: openai.NewOpenAIParser(),
 			}
-			server.HandleResponseBodyModelStreaming(ctx, reqCtx, test.body)
+			server.director = &mockDirector{}
+			reqCtx := &RequestContext{
+				Response: &Response{
+					Headers: map[string]string{
+						"content-type": "text/event-stream; charset=utf-8",
+					},
+				},
+			}
+			server.HandleResponseBody(ctx, reqCtx, test.body, true) // Hard coded to true since openAIParser does not endOfStream to switch logic.
 
 			if diff := cmp.Diff(test.want, reqCtx.Usage); diff != "" {
 				t.Errorf("HandleResponseBody returned unexpected response, diff(-want, +got): %v", diff)
@@ -237,42 +267,47 @@ func TestHandleStreamedResponseBody(t *testing.T) {
 func TestHandleResponseBodyModelStreaming_TokenAccumulation(t *testing.T) {
 	t.Parallel()
 
+	type chunkStream struct {
+		body        []byte
+		endOfStream bool
+	}
+
 	tests := []struct {
 		name      string
-		chunks    [][]byte
+		chunks    []chunkStream
 		wantUsage fwkrq.Usage
 	}{
 		{
 			name: "Standard: Usage and DONE in same chunk",
-			chunks: [][]byte{
-				[]byte(`data: {"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}` + "\n" + `data: [DONE]`),
+			chunks: []chunkStream{
+				{body: []byte(`data: {"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}` + "\n" + `data: [DONE]`), endOfStream: true},
 			},
 			wantUsage: fwkrq.Usage{PromptTokens: 5, CompletionTokens: 10, TotalTokens: 15},
 		},
 		{
 			name: "Split: Usage in Chunk 1, DONE in Chunk 2",
-			chunks: [][]byte{
+			chunks: []chunkStream{
 				// Chunk 1: Usage data arrives
-				[]byte(`data: {"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}` + "\n"),
+				{body: []byte(`data: {"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}` + "\n"), endOfStream: false},
 				// Chunk 2: Stream termination. Should NOT overwrite the usage from Chunk 1.
-				[]byte(`data: [DONE]`),
+				{body: []byte(`data: [DONE]`), endOfStream: true},
 			},
 			wantUsage: fwkrq.Usage{PromptTokens: 5, CompletionTokens: 10, TotalTokens: 15},
 		},
 		{
 			name: "Fragmented: Content -> Usage -> DONE",
-			chunks: [][]byte{
-				[]byte(`data: {"choices":[{"text":"Hello"}]}` + "\n"),
-				[]byte(`data: {"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}` + "\n"),
-				[]byte(`data: [DONE]`),
+			chunks: []chunkStream{
+				{body: []byte(`data: {"choices":[{"text":"Hello"}]}` + "\n"), endOfStream: false},
+				{body: []byte(`data: {"usage":{"prompt_tokens":5,"completion_tokens":10,"total_tokens":15}}` + "\n"), endOfStream: false},
+				{body: []byte(`data: [DONE]`), endOfStream: true},
 			},
 			wantUsage: fwkrq.Usage{PromptTokens: 5, CompletionTokens: 10, TotalTokens: 15},
 		},
 		{
 			name: "No Usage Data",
-			chunks: [][]byte{
-				[]byte(`data: {"choices":[{"text":"Hello"}]}` + "\n"),
-				[]byte(`data: [DONE]`),
+			chunks: []chunkStream{
+				{body: []byte(`data: {"choices":[{"text":"Hello"}]}` + "\n"), endOfStream: false},
+				{body: []byte(`data: [DONE]`), endOfStream: true},
 			},
 			wantUsage: fwkrq.Usage{}, // Zero values
 		},
@@ -281,12 +316,19 @@ func TestHandleResponseBodyModelStreaming_TokenAccumulation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			server := &StreamingServer{
+				parser:   openai.NewOpenAIParser(),
 				director: &mockDirector{},
 			}
-			reqCtx := &RequestContext{}
+			reqCtx := &RequestContext{
+				Response: &Response{
+					Headers: map[string]string{
+						"content-type": "text/event-stream",
+					},
+				},
+			}
 
 			for _, chunk := range tc.chunks {
-				server.HandleResponseBodyModelStreaming(context.Background(), reqCtx, chunk)
+				server.HandleResponseBody(context.Background(), reqCtx, chunk.body, chunk.endOfStream)
 			}
 
 			assert.Equal(t, tc.wantUsage, reqCtx.Usage, "Usage data should match expected accumulation")
@@ -319,4 +361,54 @@ func TestGenerateResponseHeaders_Sanitization(t *testing.T) {
 	assert.NotContains(t, gotHeaders, metadata.ObjectiveKey)
 	assert.NotContains(t, gotHeaders, metadata.DestinationEndpointKey)
 	assert.NotContains(t, gotHeaders, "content-length")
+}
+
+func TestResponseSizeAccumulation(t *testing.T) {
+	ctx := logutil.NewTestLoggerIntoContext(context.Background())
+
+	tests := []struct {
+		name             string
+		chunks           [][]byte
+		wantResponseSize int
+	}{
+		{
+			name:             "single chunk",
+			chunks:           [][]byte{[]byte("hello world")},
+			wantResponseSize: 11,
+		},
+		{
+			name:             "multiple chunks",
+			chunks:           [][]byte{[]byte("chunk1"), []byte("chunk2"), []byte("chunk3")},
+			wantResponseSize: 18,
+		},
+		{
+			name:             "empty chunk",
+			chunks:           [][]byte{[]byte("")},
+			wantResponseSize: 0,
+		},
+		{
+			name:             "mixed chunks with empty",
+			chunks:           [][]byte{[]byte("data"), []byte(""), []byte("more")},
+			wantResponseSize: 8,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &StreamingServer{
+				parser:   openai.NewOpenAIParser(),
+				director: &mockDirector{},
+			}
+			reqCtx := &RequestContext{
+				Response: &Response{
+					Headers: map[string]string{},
+				},
+			}
+			for i, chunk := range tt.chunks {
+				endOfStream := i == len(tt.chunks)-1
+				server.HandleResponseBody(ctx, reqCtx, chunk, endOfStream)
+			}
+			assert.Equal(t, tt.wantResponseSize, reqCtx.ResponseSize)
+		})
+	}
 }

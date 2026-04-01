@@ -46,9 +46,7 @@ featureGates:
 - dataLayer
 - flowControl
 saturationDetector:
-  queueDepthThreshold: 10
-  kvCacheUtilThreshold: 0.8
-  metricsStalenessThreshold: 100ms
+  pluginRef: utilization-detector
 `
 
 // successNoProfilesText represents a valid config with plugins but no profiles.
@@ -156,7 +154,7 @@ schedulingProfiles:
 featureGates:
 - flowControl
 flowControl:
-  maxBytes: 1024
+  maxBytes: "1024"
   defaultRequestTTL: 1m
 `
 
@@ -172,7 +170,7 @@ schedulingProfiles:
   - pluginRef: maxScore
 featureGates: [] # Explicitly empty
 flowControl:
-  maxBytes: 1024
+  maxBytes: "1024"
 `
 
 // successComplexFlowControlConfigText tests that Flow Control configuration with custom plugins is correctly loaded.
@@ -197,6 +195,52 @@ flowControl:
   - priority: 100
     orderingPolicyRef: customFCFS
     fairnessPolicyRef: customFairness
+`
+
+// successParserConfigText tests that configuration with parser plugin is correctly loaded.
+const successParserConfigText = `
+apiVersion: inference.networking.x-k8s.io/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+- name: maxScore
+  type: max-score-picker
+- type: openai-parser
+schedulingProfiles:
+- name: default
+  plugins:
+  - pluginRef: maxScore
+parser:
+  pluginRef: openai-parser
+`
+
+// successWithNoParserConfigText tests that a default openaiParser is injected when no parser is configured.
+const successWithNoParserConfigText = `
+apiVersion: inference.networking.x-k8s.io/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+- name: maxScore
+  type: max-score-picker
+schedulingProfiles:
+- name: default
+  plugins:
+  - pluginRef: maxScore
+`
+
+// successParserConfigText tests that configuration with parser plugin with custom name is correctly loaded.
+const successParserWithNameConfigText = `
+apiVersion: inference.networking.x-k8s.io/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+- name: maxScore
+  type: max-score-picker
+- name: openaiParser
+  type: openai-parser
+schedulingProfiles:
+- name: default
+  plugins:
+  - pluginRef: maxScore
+parser:
+  pluginRef: openaiParser
 `
 
 // --- Invalid Configurations (Syntax/Structure) ---
@@ -302,6 +346,17 @@ schedulingProfiles:
 - name: default
   plugins:
   - pluginRef: non-existent-plugin
+`
+
+// errorUndefinedSaturationDetectorPluginText references a plugin that is not defined.
+const errorUndefinedSaturationDetectorPluginText = `
+apiVersion: inference.networking.x-k8s.io/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+- name: test1
+  type: test-plugin
+saturationDetector:
+  pluginRef: unknown-plugin
 `
 
 // errorDuplicatePluginText defines the same plugin name twice.
@@ -520,4 +575,38 @@ flowControl:
   priorityBands:
   - priority: 100
     orderingPolicyRef: testScorer # Wrong type
+`
+
+// errorParserWrongPluginTypeText references a plugin of the wrong type (Scorer instead of Parser).
+const errorParserWrongPluginTypeText = `
+apiVersion: inference.networking.x-k8s.io/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+- name: maxScore
+  type: max-score-picker
+- name: openaiParser
+  type: openai-parser
+schedulingProfiles:
+- name: default
+  plugins:
+  - pluginRef: maxScore
+parser:
+  pluginRef: maxScore # Wrong name
+`
+
+// errorParserWrongPluginTypeName references a plugin of the wrong name.
+const errorParserWrongPluginNameText = `
+apiVersion: inference.networking.x-k8s.io/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+- name: maxScore
+  type: max-score-picker
+- name: openaiParser
+  type: openai-parser
+schedulingProfiles:
+- name: default
+  plugins:
+  - pluginRef: maxScore
+parser:
+  pluginRef: wrongParser # Wrong names
 `

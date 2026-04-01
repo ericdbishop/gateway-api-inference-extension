@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"strings"
 
+	"google.golang.org/protobuf/proto"
 	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 )
 
@@ -46,6 +47,21 @@ type LLMRequest struct {
 	Headers map[string]string
 	// Request Objective
 	Objectives RequestObjectives
+	// RequestSizeBytes is the size of the raw request body in bytes when available.
+	// Used for token estimation (e.g. inputTokens ≈ RequestSizeBytes/4) without parsing body or calling PlainText().
+	RequestSizeBytes int
+	// TokenizedPrompt contains the tokenization results if external tokenization is enabled.
+	// This is nil if tokenization was not performed or if the tokenizer is not configured.
+	TokenizedPrompt *TokenizedPrompt
+}
+
+// TokenizedPrompt contains the result of tokenizing the request prompt.
+// It is populated by external tokenization plugins (e.g., via a PrepareData plugin)
+// and consumed by scheduling plugins that benefit from actual token data
+// (e.g., prefix cache scoring, latency prediction).
+type TokenizedPrompt struct {
+	// TokenIDs are the token IDs for the prompt.
+	TokenIDs []uint32
 }
 
 func (r *LLMRequest) String() string {
@@ -53,13 +69,39 @@ func (r *LLMRequest) String() string {
 		return nilString
 	}
 
-	return fmt.Sprintf("RequestID: %s, TargetModel: %s, Body: %s, Headers: %v",
+	return fmt.Sprintf("RequestID: %s, TargetModel: %s, Body: %v, Headers: %v",
 		r.RequestId, r.TargetModel, r.Body, r.Headers)
 }
 
+// RequestPayload represents a strongly-typed unmarshaled request payload or raw bytes.
+type RequestPayload interface {
+	isRequestPayload()
+	IsParsed() bool
+}
+
+// PayloadMap represents a JSON request body unmarshaled into a map.
+type PayloadMap map[string]any
+
+func (PayloadMap) isRequestPayload() {}
+func (PayloadMap) IsParsed() bool    { return true }
+
+// PayloadProto represents a gRPC request body unmarshaled into a proto.Message.
+type PayloadProto struct {
+	proto.Message
+}
+
+func (PayloadProto) isRequestPayload() {}
+func (PayloadProto) IsParsed() bool    { return true }
+
+// RawPayload represents an unparsed request body kept as raw bytes.
+type RawPayload []byte
+
+func (RawPayload) isRequestPayload() {}
+func (RawPayload) IsParsed() bool    { return false }
+
 // LLMRequestBody contains the request-body fields that we parse out as user input,
 // to be used in forming scheduling decisions.
-// An LLMRequestBody must contain exactly one of CompletionsRequest, ChatCompletionsRequest, ResponsesRequest, or ConversationsRequest.
+// An LLMRequestBody must contain exactly one of CompletionsRequest, ChatCompletionsRequest, ResponsesRequest, ConversationsRequest, or EmbeddingsRequest.
 type LLMRequestBody struct {
 	// CompletionsRequest is the representation of the OpenAI /v1/completions request body.
 	Completions *CompletionsRequest `json:"completions,omitempty"`
@@ -69,6 +111,46 @@ type LLMRequestBody struct {
 	Responses *ResponsesRequest `json:"responses,omitempty"`
 	// ConversationsRequest is the representation of the OpenAI /v1/conversations request body.
 	Conversations *ConversationsRequest `json:"conversations,omitempty"`
+	// EmbeddingsRequest is the representation of the OpenAI /v1/embeddings request body.
+	Embeddings *EmbeddingsRequest `json:"embeddings,omitempty"`
+	// Payload contains the unmarshaled request payload or raw bytes.
+	// If the payload is unmarshaled, we can perform advanced processing (like prefix cache aware routing).
+	// If it remains as raw bytes, such processing may not be supported.
+	Payload RequestPayload `json:"-"`
+
+	// Stream indicates whether the request specifies a streaming response (e.g., via a stream field).
+	// This typically implies the model server's response will be streamed.
+	Stream bool `json:"-"`
+}
+
+// PromptText returns a plain-text representation of the prompt from whichever
+// API type is populated, analogous to CacheSalt().
+func (r *LLMRequestBody) PromptText() string {
+	switch {
+	case r.Completions != nil:
+		return r.Completions.Prompt
+	case r.ChatCompletions != nil:
+		var sb strings.Builder
+		for _, msg := range r.ChatCompletions.Messages {
+			text := msg.Content.PlainText()
+			if text != "" {
+				sb.WriteString(text)
+				sb.WriteString(" ")
+			}
+		}
+		return sb.String()
+	case r.Responses != nil:
+		if s, ok := r.Responses.Input.(string); ok {
+			return s
+		}
+		b, _ := json.Marshal(r.Responses.Input)
+		return string(b)
+	case r.Conversations != nil:
+		b, _ := json.Marshal(r.Conversations.Items)
+		return string(b)
+	default:
+		return ""
+	}
 }
 
 func (r *LLMRequestBody) CacheSalt() string {
@@ -83,6 +165,9 @@ func (r *LLMRequestBody) CacheSalt() string {
 	}
 	if r.Completions != nil {
 		return r.Completions.CacheSalt
+	}
+	if r.Embeddings != nil {
+		return r.Embeddings.CacheSalt
 	}
 	return ""
 }
@@ -171,6 +256,22 @@ func (c *ConversationsRequest) String() string {
 		return nilString
 	}
 	return fmt.Sprintf("{ItemsCount: %d}", len(c.Items))
+}
+
+// EmbeddingsRequest represents the OpenAI /v1/embeddings request body structure.
+// Input can be a string or array of strings; see https://platform.openai.com/docs/api-reference/embeddings.
+type EmbeddingsRequest struct {
+	// Input is the text to embed (string or array of strings).
+	Input interface{} `json:"input,omitempty"`
+	// CacheSalt is an optional request parameter to isolate prefix caches for security reasons.
+	CacheSalt string `json:"cache_salt,omitempty"`
+}
+
+func (e *EmbeddingsRequest) String() string {
+	if e == nil {
+		return nilString
+	}
+	return fmt.Sprintf("{InputType: %T}", e.Input)
 }
 
 // ConversationItem represents a single item in a conversation

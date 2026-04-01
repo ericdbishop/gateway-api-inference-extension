@@ -41,7 +41,7 @@ IMAGE_TAG ?= $(IMAGE_REPO):$(GIT_TAG)
 PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
 # The path to the E2E manifest file. It can be overridden by setting the
 # E2E_MANIFEST_PATH environment variable. Note that HF_TOKEN must be set when using the GPU-based manifest.
-E2E_MANIFEST_PATH ?= config/manifests/vllm/sim-deployment.yaml
+E2E_MANIFEST_PATH ?= test/testdata/test-sim-deployment.yaml
 # E2E_IMAGE specifies the image to be used when running e2e tests using make test-e2e.
 # it defaults to current image tag, but can be overwritten to test specific tags, releases, etc.
 E2E_IMAGE ?= $(IMAGE_TAG)
@@ -123,6 +123,15 @@ generate: controller-gen code-generator tidy ## Generate WebhookConfiguration, C
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate/boilerplate.generatego.txt" paths="./..."
 	$(CONTROLLER_GEN) crd output:dir="./config/crd/bases" paths="./..."
 	./hack/update-codegen.sh
+
+.PHONY: generate-proto
+generate-proto: protoc-gen-go protoc-gen-go-grpc ## Generate Golang code from protobuf files.
+	PATH="$(LOCALBIN):$$PATH" $(PROTOC) \
+		-I pkg/epp/framework/plugins/requesthandling/parsers/vllmgrpc/api/proto \
+		-I . \
+		--go_out=module=sigs.k8s.io/gateway-api-inference-extension:. \
+		--go-grpc_out=module=sigs.k8s.io/gateway-api-inference-extension:. \
+		pkg/epp/framework/plugins/requesthandling/parsers/vllmgrpc/api/proto/*.proto
 
 # Use same code-generator version as k8s.io/api
 CODEGEN_VERSION := $(shell go list -m -f '{{.Version}}' k8s.io/api)
@@ -543,6 +552,9 @@ HELM = $(PROJECT_DIR)/bin/helm
 YQ = $(PROJECT_DIR)/bin/yq
 KUBECTL_VALIDATE = $(PROJECT_DIR)/bin/kubectl-validate
 GCI = $(LOCALBIN)/gci
+PROTOC ?= protoc
+PROTOC_GEN_GO = $(LOCALBIN)/protoc-gen-go
+PROTOC_GEN_GO_GRPC = $(LOCALBIN)/protoc-gen-go-grpc
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.4.3
@@ -553,6 +565,8 @@ GOLANGCI_LINT_VERSION ?= v2.9.0
 HELM_VERSION ?= v3.17.1
 KUBECTL_VALIDATE_VERSION ?= v0.0.4
 GCI_VERSION ?= v0.13.6
+PROTOC_GEN_GO_VERSION ?= v1.34.2
+PROTOC_GEN_GO_GRPC_VERSION ?= v1.5.1
 YQ_VERSION ?= v4.45.1
 
 .PHONY: kustomize
@@ -608,6 +622,16 @@ $(KUBECTL_VALIDATE): $(LOCALBIN)
 gci: $(GCI) ## Download gci locally if necessary.
 $(GCI): $(LOCALBIN)
 	$(call go-install-tool,$(GCI),github.com/daixiang0/gci,$(GCI_VERSION))
+
+.PHONY: protoc-gen-go
+protoc-gen-go: $(PROTOC_GEN_GO) ## Download protoc-gen-go locally if necessary.
+$(PROTOC_GEN_GO): $(LOCALBIN)
+	$(call go-install-tool,$(PROTOC_GEN_GO),google.golang.org/protobuf/cmd/protoc-gen-go,$(PROTOC_GEN_GO_VERSION))
+
+.PHONY: protoc-gen-go-grpc
+protoc-gen-go-grpc: $(PROTOC_GEN_GO_GRPC) ## Download protoc-gen-go-grpc locally if necessary.
+$(PROTOC_GEN_GO_GRPC): $(LOCALBIN)
+	$(call go-install-tool,$(PROTOC_GEN_GO_GRPC),google.golang.org/grpc/cmd/protoc-gen-go-grpc,$(PROTOC_GEN_GO_GRPC_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary

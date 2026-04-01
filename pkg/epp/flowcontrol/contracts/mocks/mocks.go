@@ -34,8 +34,8 @@ import (
 	"fmt"
 	"sync"
 
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
+	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol/mocks"
 )
@@ -108,28 +108,16 @@ var _ contracts.RegistryShard = &MockRegistryShard{}
 
 // --- Dependency Mocks ---
 
-// MockSaturationDetector is a simple "stub-style" mock for testing.
-type MockSaturationDetector struct {
-	SaturationFunc func(ctx context.Context, candidatePods []metrics.PodMetrics) float64
-}
-
-func (m *MockSaturationDetector) Saturation(ctx context.Context, candidatePods []metrics.PodMetrics) float64 {
-	if m.SaturationFunc != nil {
-		return m.SaturationFunc(ctx, candidatePods)
-	}
-	return 0.0
-}
-
 // MockPodLocator provides a mock implementation of the contracts.PodLocator interface.
 // It allows tests to control the exact set of pods returned for a given request.
 type MockPodLocator struct {
 	// LocateFunc allows injecting custom logic.
-	LocateFunc func(ctx context.Context, requestMetadata map[string]any) []metrics.PodMetrics
+	LocateFunc func(ctx context.Context, requestMetadata map[string]any) []fwkdl.Endpoint
 	// Pods is a static return value used if LocateFunc is nil.
-	Pods []metrics.PodMetrics
+	Pods []fwkdl.Endpoint
 }
 
-func (m *MockPodLocator) Locate(ctx context.Context, requestMetadata map[string]any) []metrics.PodMetrics {
+func (m *MockPodLocator) Locate(ctx context.Context, requestMetadata map[string]any) []fwkdl.Endpoint {
 	if m.LocateFunc != nil {
 		return m.LocateFunc(ctx, requestMetadata)
 	}
@@ -137,7 +125,7 @@ func (m *MockPodLocator) Locate(ctx context.Context, requestMetadata map[string]
 	if m.Pods == nil {
 		return nil
 	}
-	result := make([]metrics.PodMetrics, len(m.Pods))
+	result := make([]fwkdl.Endpoint, len(m.Pods))
 	copy(result, m.Pods)
 	return result
 }
