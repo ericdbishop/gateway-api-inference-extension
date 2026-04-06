@@ -21,8 +21,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
@@ -33,17 +35,24 @@ import (
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/logging"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
 	framework "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/prefix"
+	reqdataprodprefix "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/requestcontrol/dataproducer/approximateprefix"
 	latencypredictor "sigs.k8s.io/gateway-api-inference-extension/sidecars/latencypredictorasync"
 )
 
 type PredictedLatency struct {
-	typedName           plugin.TypedName
-	latencypredictor    latencypredictor.PredictorInterface
-	runningRequestLists sync.Map                                      // Key: types.NamespacedName, Value: *requestPriorityQueue
-	sloContextStore     *ttlcache.Cache[string, *predictedLatencyCtx] // TTL cache for request contexts
-	headroomStrategy    headroomStrategy
-	config              Config
+	typedName             plugin.TypedName
+	latencypredictor      latencypredictor.PredictorInterface
+	runningRequestLists   sync.Map                                      // Key: types.NamespacedName, Value: *requestPriorityQueue
+	sloContextStore       *ttlcache.Cache[string, *predictedLatencyCtx] // TTL cache for request contexts
+	headroomStrategy      headroomStrategy
+	config                Config
+	prefillTokensInFlight sync.Map // Key: pod NamespacedName.String(), Value: *atomic.Int64
+}
+
+// podCounter returns the atomic counter for the given pod key, creating it if necessary.
+func (t *PredictedLatency) podCounter(m *sync.Map, key string) *atomic.Int64 {
+	v, _ := m.LoadOrStore(key, new(atomic.Int64))
+	return v.(*atomic.Int64)
 }
 
 var _ framework.Scorer = &PredictedLatency{}
@@ -64,6 +73,7 @@ type Config struct {
 	EpsilonExploreNeg         float64       `json:"epsilonExploreNeg,omitempty"`
 	AffinityGateTau           float64       `json:"affinityGateTau,omitempty"`
 	AffinityGateTauGlobal     float64       `json:"affinityGateTauGlobal,omitempty"`
+	AffinityMaxTTFTPenaltyMs  float64       `json:"affinityMaxTTFTPenaltyMs,omitempty"`
 	ContextTTL                time.Duration `json:"contextTTL,omitempty"`
 	SelectionMode             string        `json:"selectionMode,omitempty"`
 	StreamingMode             bool          `json:"streamingMode,omitempty"`
@@ -86,6 +96,7 @@ var DefaultConfig = Config{
 	EpsilonExploreNeg:         0.01,
 	AffinityGateTau:           0.80,
 	AffinityGateTauGlobal:     0.99,
+	AffinityMaxTTFTPenaltyMs:  5000.0,
 	ContextTTL:                5 * time.Minute,
 	SelectionMode:             "linear",
 	StreamingMode:             true,
@@ -148,6 +159,9 @@ func (c *Config) validate() error {
 	if c.AffinityGateTauGlobal < 0 || c.AffinityGateTauGlobal > 1 {
 		errs = append(errs, fmt.Errorf("affinityGateTauGlobal must be in (0, 1], got %f", c.AffinityGateTauGlobal))
 	}
+	if c.AffinityMaxTTFTPenaltyMs < 0 {
+		errs = append(errs, fmt.Errorf("affinityMaxTTFTPenaltyMs must be >= 0, got %f", c.AffinityMaxTTFTPenaltyMs))
+	}
 
 	if len(errs) > 0 {
 		return errors.Join(errs...)
@@ -177,7 +191,26 @@ func NewPredictedLatency(config Config, predictor latencypredictor.PredictorInte
 		if reason != ttlcache.EvictionReasonExpired {
 			return
 		}
-		predictedLatency.removeRequestFromQueue(item.Key(), item.Value())
+		plCtx := item.Value()
+		predictedLatency.removeRequestFromQueue(item.Key(), plCtx)
+		// If PreRequest ran (counter was incremented), decrement on TTL expiry to prevent
+		// the counter from staying inflated for hung requests.
+		if plCtx.prefillTokensAtDispatch > 0 || plCtx.prefillTokensAtDispatchOnPrefill > 0 {
+			// Prefill pod: only if not already decremented at TTFT (streaming disaggregated path).
+			if plCtx.prefillTargetMetadata != nil && plCtx.ttft == 0 {
+				prefillPodKey := plCtx.prefillTargetMetadata.NamespacedName.String()
+				if predictedLatency.podCounter(&predictedLatency.prefillTokensInFlight, prefillPodKey).Add(-int64(plCtx.inputTokenCount)) == 0 {
+					predictedLatency.prefillTokensInFlight.Delete(prefillPodKey)
+				}
+			}
+			// Decode pod.
+			if plCtx.targetMetadata != nil {
+				decodePodKey := plCtx.targetMetadata.NamespacedName.String()
+				if predictedLatency.podCounter(&predictedLatency.prefillTokensInFlight, decodePodKey).Add(-int64(plCtx.inputTokenCount)) == 0 {
+					predictedLatency.prefillTokensInFlight.Delete(decodePodKey)
+				}
+			}
+		}
 	})
 
 	go predictedLatency.sloContextStore.Start()
@@ -247,6 +280,37 @@ func (s *PredictedLatency) epsilonGreedyAffinityGate(
 		return candidates, false
 	}
 
+	// Load gate: compare the best sticky pod's predicted TTFT against the
+	// best overall pod's predicted TTFT.  The predictor already credits the
+	// prefix-cache benefit, so a positive delta means queuing cost exceeds
+	// cache savings — break stickiness.
+	if s.config.AffinityMaxTTFTPenaltyMs > 0 {
+		bestTTFTAll := math.MaxFloat64
+		for _, p := range candidates {
+			if p.TTFT > 0 && p.TTFT < bestTTFTAll {
+				bestTTFTAll = p.TTFT
+			}
+		}
+		bestTTFTSticky := math.MaxFloat64
+		for _, p := range eligible {
+			if p.TTFT > 0 && p.TTFT < bestTTFTSticky {
+				bestTTFTSticky = p.TTFT
+			}
+		}
+		if bestTTFTAll < math.MaxFloat64 && bestTTFTSticky < math.MaxFloat64 {
+			penalty := bestTTFTSticky - bestTTFTAll
+			if penalty > s.config.AffinityMaxTTFTPenaltyMs {
+				logger.V(logutil.DEBUG).Info("Affinity load gate: TTFT penalty too high, breaking stickiness",
+					"path", label,
+					"bestStickyTTFT", bestTTFTSticky,
+					"bestOverallTTFT", bestTTFTAll,
+					"penaltyMs", penalty,
+					"maxPenaltyMs", s.config.AffinityMaxTTFTPenaltyMs)
+				return candidates, false
+			}
+		}
+	}
+
 	logger.V(logutil.DEBUG).Info("ε-greedy: exploiting (apply affinity gate)",
 		"path", label, "threshold", prefixStickyThreshold, "eligibleCount", len(eligible), "total", len(candidates))
 	return eligible, true
@@ -305,8 +369,10 @@ func (s *PredictedLatency) Score(ctx context.Context, state *framework.CycleStat
 
 	predictedLatencyCtx, err := s.getPredictedLatencyContextForRequest(request)
 	if err != nil {
-		logger.V(logutil.DEBUG).Error(err, "PredictedLatency: no SLO context found for request, returning composite-only scores")
-		return s.scoreWithoutPredictions(ctx, newPredictedLatencyContext(request), endpoints, rng)
+		logger.V(logutil.DEBUG).Info("PredictedLatency: no SLO context found for request, returning composite-only scores")
+		predictedLatencyCtx = newPredictedLatencyContext(request)
+		s.setPredictedLatencyContextForRequest(request, predictedLatencyCtx)
+		return s.scoreWithoutPredictions(ctx, predictedLatencyCtx, endpoints, rng)
 	}
 
 	// Extract predictions for filtered endpoints (supports profile-based filtering)
@@ -359,8 +425,8 @@ func (t *PredictedLatency) getOrMakePredictedLatencyContextForRequest(request *f
 
 func (s *PredictedLatency) getPrefixCacheScoreForPod(ctx context.Context, cycleState *framework.CycleState, endpoint framework.Endpoint) float64 {
 	log.FromContext(ctx).V(logutil.DEBUG).Info("Running getPrefixCacheScoreForPod, getting prefix cache score for endpoint", "endpoint", endpoint.GetMetadata().String())
-	plugintype := prefix.PrefixCachePluginType
-	pluginname := prefix.PrefixCachePluginType
+	plugintype := reqdataprodprefix.ApproxPrefixCachePluginType
+	pluginname := reqdataprodprefix.ApproxPrefixCachePluginType
 	cycleStateKey := (plugin.TypedName{Type: plugintype, Name: pluginname}).String()
 	stateData, err := cycleState.Read(plugin.StateKey(cycleStateKey))
 
@@ -372,7 +438,7 @@ func (s *PredictedLatency) getPrefixCacheScoreForPod(ctx context.Context, cycleS
 		return 0.0
 	}
 
-	prefixCacheState, ok := stateData.(*prefix.SchedulingContextState)
+	prefixCacheState, ok := stateData.(*reqdataprodprefix.SchedulingContextState)
 	if !ok {
 		// This should not happen if the plugin is configured correctly.
 		log.FromContext(ctx).Error(fmt.Errorf("unexpected state type: %T", stateData), "failed to read prefix cache state")
@@ -386,7 +452,7 @@ func (s *PredictedLatency) getPrefixCacheScoreForPod(ctx context.Context, cycleS
 		return 0.0
 	}
 
-	matchLen := prefixCacheState.PrefixCacheServers[prefix.ServerID(endpoint.GetMetadata().NamespacedName)]
+	matchLen := prefixCacheState.PrefixCacheServers[reqdataprodprefix.ServerID(endpoint.GetMetadata().NamespacedName)]
 	log.FromContext(ctx).V(logutil.DEBUG).Info("Prefix cache score for endpoint", "endpoint", endpoint.GetMetadata().String(), "matchLen", matchLen, "totalPrefixes", total)
 	return float64(matchLen) / float64(total)
 }

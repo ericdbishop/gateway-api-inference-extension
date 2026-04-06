@@ -24,9 +24,10 @@ import (
 	gwhttp "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/http"
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	"sigs.k8s.io/gateway-api/pkg/features"
+	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
+	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 )
 
@@ -38,9 +39,9 @@ var InferencePoolHTTPRoutePortValidation = suite.ConformanceTest{
 	ShortName:   "InferencePoolHTTPRoutePortValidation",
 	Description: "Validates HTTPRoute backendRef port configurations (unspecified, matching, non-matching) when referencing an InferencePool, and checks resulting status conditions.",
 	Manifests:   []string{"tests/inferencepool_httproute_port_validation.yaml"},
-	Features: []features.FeatureName{
-		features.FeatureName("SupportInferencePool"),
-		features.SupportGateway,
+	Features: []gatewayfeatures.FeatureName{
+		features.SupportInferencePool,
+		gatewayfeatures.SupportGateway,
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		gatewayNN := resources.PrimaryGatewayNN
@@ -48,7 +49,6 @@ var InferencePoolHTTPRoutePortValidation = suite.ConformanceTest{
 
 		gatewayAddr := k8sutils.GetGatewayEndpoint(t, s.Client, s.TimeoutConfig, gatewayNN)
 
-		rt := &RoundTripper
 		t.Run("Scenario 1: HTTPRoute backendRef to InferencePool with Port Unspecified", func(t *testing.T) {
 			routeNN := types.NamespacedName{Name: "httproute-pool-port-unspecified", Namespace: resources.AppBackendNamespace}
 			hostname := "port-unspecified.example.com"
@@ -59,8 +59,8 @@ var InferencePoolHTTPRoutePortValidation = suite.ConformanceTest{
 
 			gwhttp.MakeRequestAndExpectEventuallyConsistentResponse(
 				t,
-				rt,
-				rt.TimeoutConfig,
+				s.RoundTripper,
+				s.TimeoutConfig,
 				gatewayAddr,
 				gwhttp.ExpectedResponse{
 					Request: gwhttp.Request{
@@ -86,8 +86,8 @@ var InferencePoolHTTPRoutePortValidation = suite.ConformanceTest{
 
 			gwhttp.MakeRequestAndExpectEventuallyConsistentResponse(
 				t,
-				rt,
-				rt.TimeoutConfig,
+				s.RoundTripper,
+				s.TimeoutConfig,
 				gatewayAddr,
 				gwhttp.ExpectedResponse{
 					Request: gwhttp.Request{
@@ -114,8 +114,8 @@ var InferencePoolHTTPRoutePortValidation = suite.ConformanceTest{
 
 			gwhttp.MakeRequestAndExpectEventuallyConsistentResponse(
 				t,
-				rt,
-				rt.TimeoutConfig,
+				s.RoundTripper,
+				s.TimeoutConfig,
 				gatewayAddr,
 				gwhttp.ExpectedResponse{
 					Request: gwhttp.Request{

@@ -62,23 +62,9 @@ type Extractor struct {
 	engineLabelKey string
 }
 
-// Produces returns the data attributes that are provided by the fwkdl.metrics
-// package.
-func Produces() map[string]any {
-	return map[string]any{
-		WaitingQueueSizeKey:    int(0),
-		RunningRequestsSizeKey: int(0),
-		KVCacheUsagePercentKey: float64(0),
-		ActiveModelsKey:        map[string]int{},
-		WaitingModelsKey:       map[string]int{},
-		MaxActiveModelsKey:     int(0),
-		UpdateTimeKey:          time.Time{},
-	}
-}
-
-// NewModelServerExtractor returns a new model server protocol (MSP) metrics extractor,
+// NewCoreMetricsExtractor returns a new model server protocol (MSP) metrics extractor,
 // configured with the given metrics' registry.
-func NewModelServerExtractor(registry *MappingRegistry, engineLabelKey string) (*Extractor, error) {
+func NewCoreMetricsExtractor(registry *MappingRegistry, engineLabelKey string) (*Extractor, error) {
 	if registry == nil {
 		return nil, errors.New("mapping registry cannot be nil")
 	}
@@ -250,7 +236,7 @@ func populateCacheInfoMetrics(clone *fwkdl.Metrics, metric *dto.Metric, errs *[]
 
 // addAdapters splits a comma-separated adapter list and stores keys with default value 0.
 func addAdapters(m map[string]int, csv string) {
-	for _, name := range strings.Split(csv, ",") {
+	for name := range strings.SplitSeq(csv, ",") {
 		if trimmed := strings.TrimSpace(name); trimmed != "" {
 			m[trimmed] = 0
 		}

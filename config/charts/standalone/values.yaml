@@ -1,8 +1,8 @@
 inferenceExtension:
   replicas: 1
   image:
-    name: epp
-    hub: us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension
+    registry: us-central1-docker.pkg.dev/k8s-staging-images
+    repository: gateway-api-inference-extension/epp
     tag: main
     pullPolicy: Always
   extProcPort: 9002
@@ -22,7 +22,7 @@ inferenceExtension:
     # unused when createInferencePool is true
     targetPorts: 8000
     # unused when createInferencePool is true
-    modelServerType: vllm # vllm, triton-tensorrt-llm
+    modelServerType: vllm # vllm, sglang, triton-tensorrt-llm, trtllm-serve
 
 
   sidecar:
@@ -301,6 +301,16 @@ inferenceExtension:
     # common latencyPredictor setting exists in config/charts/inference-extension/values.yaml
     enabled: false
 
+  # Metrics DataSource Configuration
+  # These values configure how the EPP scrapes metrics from model server pods.
+  metricsDataSource:
+    # scheme is the HTTP scheme used to scrape metrics (http or https).
+    scheme: "http"
+    # path is the URL path on the model server pod that exposes Prometheus metrics.
+    path: "/metrics"
+    # insecureSkipVerify disables TLS certificate verification when scheme is https.
+    insecureSkipVerify: true
+
 # Options: ["gke"]
 provider:
   name: none
@@ -315,11 +325,11 @@ provider:
 inferencePool:
   targetPorts:
     - number: 8000
-  modelServerType: vllm # vllm, triton-tensorrt-llm
+  modelServerType: vllm # vllm, sglang, triton-tensorrt-llm, trtllm-serve
   apiVersion: inference.networking.k8s.io/v1
   # modelServers: # REQUIRED
   #   matchLabels:
-  #     app: vllm-llama3-8b-instruct
+  #     app: vllm-qwen3-32b
 
   # Should only used if apiVersion is inference.networking.x-k8s.io/v1alpha2,
   # This will soon be deprecated when upstream GW providers support v1, just doing something simple for now.

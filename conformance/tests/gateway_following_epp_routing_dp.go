@@ -32,9 +32,10 @@ import (
 	gwhttp "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/http"
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	"sigs.k8s.io/gateway-api/pkg/features"
+	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
+	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/test"
 )
@@ -53,9 +54,9 @@ var GatewayFollowingEPPRoutingWithDataParallelism = suite.ConformanceTest{
 	ShortName:   "GatewayFollowingEPPRoutingWithDataParallelism",
 	Description: "Inference gateway should restrict traffic to EPP-selected pods while EPP balances across multiple targetPorts (DP ranks)",
 	Manifests:   []string{"tests/gateway_following_epp_routing_dp.yaml"},
-	Features: []features.FeatureName{
-		features.FeatureName("SupportInferencePool"),
-		features.SupportGateway,
+	Features: []gatewayfeatures.FeatureName{
+		features.SupportInferencePool,
+		gatewayfeatures.SupportGateway,
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		const (
@@ -92,13 +93,12 @@ var GatewayFollowingEPPRoutingWithDataParallelism = suite.ConformanceTest{
 			"prompt": "Write as if you were a critic: San Francisco"
 		}`
 
-		rt := &RoundTripper
 		// Single-pod pin to ensure header filter works before main test cases.
 		for _, backend := range backends {
 			gwhttp.MakeRequestAndExpectEventuallyConsistentResponse(
 				t,
-				rt,
-				rt.TimeoutConfig,
+				s.RoundTripper,
+				s.TimeoutConfig,
 				gwAddr,
 				gwhttp.ExpectedResponse{
 					Request: gwhttp.Request{
@@ -182,7 +182,7 @@ var GatewayFollowingEPPRoutingWithDataParallelism = suite.ConformanceTest{
 
 func assertTrafficOnlyReachesToExpectedPodsDP(
 	t *testing.T,
-	_ *suite.ConformanceTestSuite,
+	suite *suite.ConformanceTestSuite,
 	gwAddr string,
 	expected gwhttp.ExpectedResponse,
 	expectedPodNames []string,
@@ -196,7 +196,7 @@ func assertTrafficOnlyReachesToExpectedPodsDP(
 	)
 
 	var (
-		rt = RoundTripper
+		rt = suite.RoundTripper
 		g  errgroup.Group
 		r  = gwhttp.MakeRequest(t, &expected, gwAddr, "HTTP", "http")
 	)

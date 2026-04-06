@@ -33,11 +33,13 @@ import (
 	testclock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/flowcontrol/usagelimits"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts/mocks"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	fwmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol/mocks"
 )
@@ -57,6 +59,18 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+type mockSaturationDetector struct {
+	flowcontrol.SaturationDetector
+	SaturationFunc func(ctx context.Context, candidatePods []fwkdl.Endpoint) float64
+}
+
+func (m *mockSaturationDetector) Saturation(ctx context.Context, candidatePods []fwkdl.Endpoint) float64 {
+	if m.SaturationFunc != nil {
+		return m.SaturationFunc(ctx, candidatePods)
+	}
+	return 0.0
+}
+
 // testHarness provides a unified, mock-based testing environment for the ShardProcessor. It centralizes all mock state
 // and provides helper methods for setting up tests and managing the processor's lifecycle.
 type testHarness struct {
@@ -73,8 +87,8 @@ type testHarness struct {
 	processor          *ShardProcessor
 	clock              *testclock.FakeClock
 	logger             logr.Logger
-	saturationDetector *mocks.MockSaturationDetector
-	podLocator         *mocks.MockPodLocator
+	saturationDetector *mockSaturationDetector
+	endpointCandidates *mocks.MockEndpointCandidates
 
 	// --- Centralized Mock State ---
 	// The harness's mutex protects the single source of truth for all mock state.
@@ -94,8 +108,8 @@ func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarn
 		MockRegistryShard:  &mocks.MockRegistryShard{},
 		clock:              testclock.NewFakeClock(time.Now()),
 		logger:             logr.Discard(),
-		saturationDetector: &mocks.MockSaturationDetector{},
-		podLocator:         &mocks.MockPodLocator{Pods: []metrics.PodMetrics{&metrics.FakePodMetrics{}}},
+		saturationDetector: &mockSaturationDetector{},
+		endpointCandidates: &mocks.MockEndpointCandidates{Candidates: []fwkdl.Endpoint{&metrics.FakePodMetrics{}}},
 		startSignal:        make(chan struct{}),
 		queues:             make(map[flowcontrol.FlowKey]*mocks.MockManagedQueue),
 		priorityFlows:      make(map[int][]flowcontrol.FlowKey),
@@ -120,9 +134,11 @@ func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarn
 
 	h.processor = NewShardProcessor(
 		h.ctx,
+		"test-pool",
 		h,
 		h.saturationDetector,
-		h.podLocator,
+		h.endpointCandidates,
+		usagelimits.DefaultPolicy(),
 		h.clock,
 		expiryCleanupInterval,
 		100,
@@ -140,12 +156,10 @@ func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarn
 func (h *testHarness) Start() {
 	h.t.Helper()
 	h.ctx, h.cancel = context.WithCancel(context.Background())
-	h.wg.Add(1)
-	go func() {
-		defer h.wg.Done()
+	h.wg.Go(func() {
 		<-h.startSignal // Wait for the signal to begin execution.
 		h.processor.Run(h.ctx)
-	}()
+	})
 }
 
 // Go unpauses the processor's main Run loop.
@@ -546,6 +560,7 @@ func TestShardProcessor(t *testing.T) {
 			// A successful test is one that completes without panicking.
 			time.Sleep(50 * time.Millisecond)
 		})
+
 	})
 
 	t.Run("Unit", func(t *testing.T) {
@@ -738,7 +753,7 @@ func TestShardProcessor(t *testing.T) {
 							qLow := h.addQueue(keyLow)
 							require.NoError(t, qLow.Add(h.newTestItem("item-low", keyLow, testTTL)))
 
-							h.saturationDetector.SaturationFunc = func(_ context.Context, _ []metrics.PodMetrics) float64 {
+							h.saturationDetector.SaturationFunc = func(_ context.Context, _ []fwkdl.Endpoint) float64 {
 								return 1.0 // Saturated
 							}
 						},

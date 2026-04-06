@@ -36,11 +36,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 	testclock "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/flowcontrol/usagelimits"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts/mocks"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/internal"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	frameworkmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol/mocks"
 )
@@ -69,6 +71,14 @@ func withShardProcessorFactory(factory shardProcessorFactory) flowControllerOpti
 	return func(fc *FlowController) {
 		fc.shardProcessorFactory = factory
 	}
+}
+
+type mockSaturationDetector struct {
+	flowcontrol.SaturationDetector
+}
+
+func (m *mockSaturationDetector) Saturation(_ context.Context, _ []datalayer.Endpoint) float64 {
+	return 0.0
 }
 
 // testHarness holds the `FlowController` and its dependencies under test.
@@ -115,12 +125,14 @@ func newUnitHarness(
 		opt(harnessOpts)
 	}
 
-	mockDetector := &mocks.MockSaturationDetector{}
-	mockPodLocator := &mocks.MockPodLocator{}
+	mockDetector := &mockSaturationDetector{}
+	mockEndpointCandidates := &mocks.MockEndpointCandidates{}
 
 	mockProcessorFactory := &mockShardProcessorFactory{
 		processors: make(map[string]*mockShardProcessor),
 	}
+
+	usageLimitPolicy := usagelimits.DefaultPolicy()
 
 	// Default the registry if nil, simplifying tests that don't focus on registry interaction.
 	if registry == nil {
@@ -132,7 +144,7 @@ func newUnitHarness(
 		withClock(harnessOpts.clock),
 		withShardProcessorFactory(mockProcessorFactory.new),
 	}
-	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, mockPodLocator, fcOpts...)
+	fc, err := NewFlowController(ctx, "test-pool", cfg, registry, mockDetector, mockEndpointCandidates, usageLimitPolicy, fcOpts...)
 	require.NoError(t, err, "failed to create FlowController for unit test harness")
 
 	h := &testHarness{
@@ -154,8 +166,9 @@ func newUnitHarness(
 // validating the controller-processor interaction.
 func newIntegrationHarness(t *testing.T, ctx context.Context, cfg *Config, registry *mockRegistryClient) *testHarness {
 	t.Helper()
-	mockDetector := &mocks.MockSaturationDetector{}
-	mockPodLocator := &mocks.MockPodLocator{}
+	mockDetector := &mockSaturationDetector{}
+	mockEndpointCandidates := &mocks.MockEndpointCandidates{}
+	usageLimitPolicy := usagelimits.DefaultPolicy()
 
 	// Align FakeClock with system time. See explanation in newUnitHarness.
 	mockClock := testclock.NewFakeClock(time.Now())
@@ -167,7 +180,7 @@ func newIntegrationHarness(t *testing.T, ctx context.Context, cfg *Config, regis
 		withRegistryClient(registry),
 		withClock(mockClock),
 	}
-	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, mockPodLocator, opts...)
+	fc, err := NewFlowController(ctx, "test-pool", cfg, registry, mockDetector, mockEndpointCandidates, usageLimitPolicy, opts...)
 	require.NoError(t, err, "failed to create FlowController for integration test harness")
 
 	h := &testHarness{
@@ -276,8 +289,9 @@ type mockShardProcessorFactory struct {
 func (f *mockShardProcessorFactory) new(
 	_ context.Context, // The factory does not use the lifecycle context; it's passed to the processor's Run method later.
 	shard contracts.RegistryShard,
-	_ contracts.SaturationDetector,
-	_ contracts.PodLocator,
+	_ flowcontrol.SaturationDetector,
+	_ contracts.EndpointCandidates,
+	_ flowcontrol.UsageLimitPolicy,
 	_ clock.WithTicker,
 	_ time.Duration,
 	_ int,
@@ -1140,8 +1154,9 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 		h.fc.shardProcessorFactory = func(
 			ctx context.Context, // The context created by getOrStartWorker for the potential new processor.
 			shard contracts.RegistryShard,
-			_ contracts.SaturationDetector,
-			_ contracts.PodLocator,
+			_ flowcontrol.SaturationDetector,
+			_ contracts.EndpointCandidates,
+			_ flowcontrol.UsageLimitPolicy,
 			_ clock.WithTicker,
 			_ time.Duration,
 			_ int,

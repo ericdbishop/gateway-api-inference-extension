@@ -29,9 +29,10 @@ import (
 	gwhttp "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/http"
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	"sigs.k8s.io/gateway-api/pkg/features"
+	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
+	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/test"
 )
@@ -45,9 +46,9 @@ var GatewayFollowingEPPRouting = suite.ConformanceTest{
 	ShortName:   "GatewayFollowingEPPRouting",
 	Description: "Inference gateway should send traffic to an endpoint in the list returned by EPP",
 	Manifests:   []string{"tests/gateway_following_epp_routing.yaml"},
-	Features: []features.FeatureName{
-		features.FeatureName("SupportInferencePool"),
-		features.SupportGateway,
+	Features: []gatewayfeatures.FeatureName{
+		features.SupportInferencePool,
+		gatewayfeatures.SupportGateway,
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		const (
@@ -83,14 +84,13 @@ var GatewayFollowingEPPRouting = suite.ConformanceTest{
             "prompt": "Write as if you were a critic: San Francisco"
         }`
 
-		rt := &RoundTripper
 		for i := 0; i < len(pods); i++ {
 			// Send an initial request targeting a single pod and wait for it to be successful to ensure the Gateway and EPP
 			// are functioning correctly before running the main test cases.
 			gwhttp.MakeRequestAndExpectEventuallyConsistentResponse(
 				t,
-				rt,
-				rt.TimeoutConfig,
+				s.RoundTripper,
+				s.TimeoutConfig,
 				gwAddr,
 				gwhttp.ExpectedResponse{
 					Request: gwhttp.Request{
@@ -143,7 +143,7 @@ var GatewayFollowingEPPRouting = suite.ConformanceTest{
 				t.Logf("Sending request to %s with EPP header '%s: %s'", gwAddr, test.HeaderTestEppEndPointSelectionKey, eppHeaderValue)
 				t.Logf("Expecting traffic to be routed to pod: %v", tc.expectAllRequestsRoutedWithinPodNames)
 
-				assertTrafficOnlyReachesToExpectedPods(t, gwAddr, gwhttp.ExpectedResponse{
+				assertTrafficOnlyReachesToExpectedPods(t, s, gwAddr, gwhttp.ExpectedResponse{
 					Request: gwhttp.Request{
 						Host:    hostname,
 						Path:    path,
@@ -162,14 +162,14 @@ var GatewayFollowingEPPRouting = suite.ConformanceTest{
 	},
 }
 
-func assertTrafficOnlyReachesToExpectedPods(t *testing.T, gwAddr string, expected gwhttp.ExpectedResponse, expectedPodNames []string) {
+func assertTrafficOnlyReachesToExpectedPods(t *testing.T, suite *suite.ConformanceTestSuite, gwAddr string, expected gwhttp.ExpectedResponse, expectedPodNames []string) {
 	t.Helper()
 	const (
 		concurrentRequests = 10
 		totalRequests      = 100
 	)
 	var (
-		roundTripper = RoundTripper
+		roundTripper = suite.RoundTripper
 		g            errgroup.Group
 		req          = gwhttp.MakeRequest(t, &expected, gwAddr, "HTTP", "http")
 	)

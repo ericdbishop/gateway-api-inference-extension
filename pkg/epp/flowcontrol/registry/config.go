@@ -22,15 +22,16 @@ import (
 	"slices"
 	"time"
 
-	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/fairness"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/ordering"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/queue"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/flowcontrol/fairness"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/flowcontrol/ordering"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/flowcontrol/usagelimits"
 )
 
 // --- Defaults ---
@@ -40,6 +41,8 @@ const (
 	DefaultOrderingPolicyRef string = ordering.FCFSOrderingPolicyType
 	// DefaultFairnessPolicyRef is the default policy for selecting which flow's queue to service next.
 	DefaultFairnessPolicyRef string = fairness.GlobalStrictFairnessPolicyType
+	// DefaultUsageLimitPolicyRef is the default policy to compute usage limit of a priority band dynamically.
+	DefaultUsageLimitPolicyRef string = usagelimits.StaticUsageLimitPolicyType
 )
 
 const (
@@ -56,8 +59,6 @@ const (
 	// defaultPriorityBandGCTimeout is the default duration of inactivity after which a dynamically provisioned
 	// priority band is garbage collected. Set to 2x flow GC timeout to ensure flows are cleaned up first.
 	defaultPriorityBandGCTimeout time.Duration = 2 * defaultFlowGCTimeout
-	// dynamicDefaultPriorityBandName is the reserved name for the template band used for dynamic provisioning.
-	dynamicDefaultPriorityBandName = "Dynamic-Default"
 )
 
 // --- Capability Checking ---
@@ -150,11 +151,6 @@ type PriorityBandConfig struct {
 	// Convention: Highest numeric value corresponds to highest priority (centered on 0).
 	// Required.
 	Priority int
-
-	// PriorityName is a human-readable name for this priority band (e.g., "Critical", "Standard").
-	// It must be unique across all priority bands in the configuration.
-	// Required.
-	PriorityName string
 
 	// OrderingPolicy is the hydrated singleton instance of the policy.
 	// This policy governs which request *within this flow's queue* to select next (e.g., "fcfs").
@@ -347,6 +343,19 @@ func WithBandMaxBytes(maxBytes uint64) PriorityBandConfigOption {
 
 // --- Constructors ---
 
+// resolveMaxBytes extracts and validates MaxBytes from a resource.Quantity pointer.
+// Returns 0 (use default) if maxBytes is nil.
+func resolveMaxBytes(maxBytes *resource.Quantity) (uint64, error) {
+	if maxBytes == nil {
+		return 0, nil
+	}
+	v := maxBytes.Value()
+	if v < 0 {
+		return 0, fmt.Errorf("MaxBytes must be non-negative, got %d", v)
+	}
+	return uint64(v), nil
+}
+
 // NewConfigFromAPI creates a new Config by translating the API configuration.
 func NewConfigFromAPI(apiConfig *configapi.FlowControlConfig, handle plugin.Handle) (*Config, error) {
 	if apiConfig == nil {
@@ -355,11 +364,12 @@ func NewConfigFromAPI(apiConfig *configapi.FlowControlConfig, handle plugin.Hand
 
 	opts := make([]ConfigOption, 0, len(apiConfig.PriorityBands)+3)
 
-	if apiConfig.MaxBytes != nil {
-		if *apiConfig.MaxBytes < 0 {
-			return nil, fmt.Errorf("MaxBytes must be non-negative, got %d", *apiConfig.MaxBytes)
-		}
-		opts = append(opts, WithMaxBytes(uint64(*apiConfig.MaxBytes)))
+	maxBytes, err := resolveMaxBytes(apiConfig.MaxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("global %w", err)
+	}
+	if maxBytes > 0 {
+		opts = append(opts, WithMaxBytes(maxBytes))
 	}
 
 	if apiConfig.DefaultPriorityBand != nil {
@@ -386,11 +396,12 @@ func buildDefaultPriorityBandTemplate(
 	apiBand *configapi.PriorityBandConfig,
 ) (*PriorityBandConfig, error) {
 	bandOpts := make([]PriorityBandConfigOption, 0, 3)
-	if apiBand.MaxBytes != nil {
-		if *apiBand.MaxBytes < 0 {
-			return nil, fmt.Errorf("DefaultPriorityBand MaxBytes must be non-negative, got %d", *apiBand.MaxBytes)
-		}
-		bandOpts = append(bandOpts, WithBandMaxBytes(uint64(*apiBand.MaxBytes)))
+	maxBytes, err := resolveMaxBytes(apiBand.MaxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("DefaultPriorityBand %w", err)
+	}
+	if maxBytes > 0 {
+		bandOpts = append(bandOpts, WithBandMaxBytes(maxBytes))
 	}
 	if apiBand.OrderingPolicyRef != "" {
 		bandOpts = append(bandOpts, WithOrderingPolicy(apiBand.OrderingPolicyRef, handle))
@@ -400,7 +411,7 @@ func buildDefaultPriorityBandTemplate(
 	}
 
 	// We pass priority 0 as placeholder since it's a template.
-	templateBand, err := NewPriorityBandConfig(handle, 0, dynamicDefaultPriorityBandName, bandOpts...)
+	templateBand, err := NewPriorityBandConfig(handle, 0, bandOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create default priority band template: %w", err)
 	}
@@ -409,11 +420,12 @@ func buildDefaultPriorityBandTemplate(
 
 func buildPriorityBand(handle plugin.Handle, band configapi.PriorityBandConfig) (*PriorityBandConfig, error) {
 	bandOpts := make([]PriorityBandConfigOption, 0, 3)
-	if band.MaxBytes != nil {
-		if *band.MaxBytes < 0 {
-			return nil, fmt.Errorf("priority band %d MaxBytes must be non-negative, got %d", band.Priority, *band.MaxBytes)
-		}
-		bandOpts = append(bandOpts, WithBandMaxBytes(uint64(*band.MaxBytes)))
+	maxBytes, err := resolveMaxBytes(band.MaxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("priority band %d %w", band.Priority, err)
+	}
+	if maxBytes > 0 {
+		bandOpts = append(bandOpts, WithBandMaxBytes(maxBytes))
 	}
 	if band.OrderingPolicyRef != "" {
 		bandOpts = append(bandOpts, WithOrderingPolicy(band.OrderingPolicyRef, handle))
@@ -422,7 +434,7 @@ func buildPriorityBand(handle plugin.Handle, band configapi.PriorityBandConfig) 
 		bandOpts = append(bandOpts, WithFairnessPolicy(band.FairnessPolicyRef, handle))
 	}
 
-	pb, err := NewPriorityBandConfig(handle, band.Priority, "", bandOpts...)
+	pb, err := NewPriorityBandConfig(handle, band.Priority, bandOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create priority band config for priority %d: %w", band.Priority, err)
 	}
@@ -456,7 +468,7 @@ func NewConfig(handle plugin.Handle, opts ...ConfigOption) (*Config, error) {
 	// Initialize DefaultPriorityBand if missing.
 	// This ensures we always have a template for dynamic provisioning.
 	if builder.config.DefaultPriorityBand == nil {
-		template, err := NewPriorityBandConfig(handle, 0, dynamicDefaultPriorityBandName)
+		template, err := NewPriorityBandConfig(handle, 0)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create default priority band: %w", err)
 		}
@@ -485,12 +497,10 @@ func NewConfig(handle plugin.Handle, opts ...ConfigOption) (*Config, error) {
 func NewPriorityBandConfig(
 	handle plugin.Handle,
 	priority int,
-	name string,
 	opts ...PriorityBandConfigOption,
 ) (*PriorityBandConfig, error) {
 	pb := &PriorityBandConfig{
-		Priority:     priority,
-		PriorityName: name,
+		Priority: priority,
 	}
 
 	for _, opt := range opts {
@@ -509,9 +519,6 @@ func NewPriorityBandConfig(
 // --- Validation, Defaults & Hydration ---
 
 func (p *PriorityBandConfig) applyDefaults(handle plugin.Handle) error {
-	if p.PriorityName == "" {
-		p.PriorityName = fmt.Sprintf("priority-%d", p.Priority)
-	}
 	if p.OrderingPolicy == nil {
 		policy, err := orderingPolicy(DefaultOrderingPolicyRef, handle)
 		if err != nil {
@@ -542,9 +549,6 @@ func (p *PriorityBandConfig) applyDefaults(handle plugin.Handle) error {
 
 // validate checks the integrity of a single band's configuration.
 func (p *PriorityBandConfig) validate(checker capabilityChecker) error {
-	if p.PriorityName == "" {
-		return fmt.Errorf("PriorityName is required for priority band %d", p.Priority)
-	}
 	if p.OrderingPolicy == nil {
 		return fmt.Errorf("OrderingPolicy instance is missing for priority band %d", p.Priority)
 	}
@@ -556,8 +560,8 @@ func (p *PriorityBandConfig) validate(checker capabilityChecker) error {
 	}
 	if checker != nil {
 		if err := checker.CheckCompatibility(p.OrderingPolicy, p.Queue); err != nil {
-			return fmt.Errorf("priority band %d (%s) configuration error: %w",
-				p.Priority, p.PriorityName, err)
+			return fmt.Errorf("priority band %d configuration error: %w",
+				p.Priority, err)
 		}
 	}
 	return nil
@@ -587,13 +591,7 @@ func (c *Config) validate(checker capabilityChecker) error {
 	}
 
 	// Validate statically configured bands.
-	names := sets.New[string]()
 	for _, band := range c.PriorityBands {
-		if names.Has(band.PriorityName) {
-			return fmt.Errorf("duplicate priority name %q found", band.PriorityName)
-		}
-		names.Insert(band.PriorityName)
-
 		if err := band.validate(checker); err != nil {
 			return err
 		}
@@ -621,7 +619,6 @@ func (c *Config) partition(shardIndex, totalShards int) *ShardConfig {
 	for _, template := range c.PriorityBands {
 		shardBand := &PriorityBandConfig{
 			Priority:       template.Priority,
-			PriorityName:   template.PriorityName,
 			OrderingPolicy: template.OrderingPolicy,
 			FairnessPolicy: template.FairnessPolicy,
 			Queue:          template.Queue,

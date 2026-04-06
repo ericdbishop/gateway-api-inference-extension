@@ -31,9 +31,10 @@ import (
 	gwhttp "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/http"
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	"sigs.k8s.io/gateway-api/pkg/features"
+	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
+	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/test"
 )
@@ -49,9 +50,9 @@ var GatewayWeightedAcrossTwoInferencePools = suite.ConformanceTest{
 	ShortName:   "GatewayWeightedAcrossTwoInferencePools",
 	Description: "Gateway should split traffic across two InferencePools based on backendRef weights and route only to endpoints of the selected InferencePool",
 	Manifests:   []string{"tests/gateway_weighted_two_pools.yaml"},
-	Features: []features.FeatureName{
-		features.SupportGateway,
-		features.FeatureName("SupportInferencePool"),
+	Features: []gatewayfeatures.FeatureName{
+		features.SupportInferencePool,
+		gatewayfeatures.SupportGateway,
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		const (
@@ -114,11 +115,10 @@ var GatewayWeightedAcrossTwoInferencePools = suite.ConformanceTest{
 		// should filter to endpoints that actually belong to its pool.
 		allIPs := append(append([]string{}, primaryPodIPs...), secondaryPodIPs...)
 		eppHeaderValue := strings.Join(allIPs, ",")
-		rt := &RoundTripper
 		gwhttp.MakeRequestAndExpectEventuallyConsistentResponse(
 			t,
-			rt,
-			rt.TimeoutConfig,
+			s.RoundTripper,
+			s.TimeoutConfig,
 			gwAddr,
 			gwhttp.ExpectedResponse{
 				Request: gwhttp.Request{
@@ -169,7 +169,7 @@ var GatewayWeightedAcrossTwoInferencePools = suite.ConformanceTest{
 
 		for range totalRequests {
 			g.Go(func() error {
-				cReq, cRes, err := RoundTripper.CaptureRoundTrip(req)
+				cReq, cRes, err := s.RoundTripper.CaptureRoundTrip(req)
 				if err != nil {
 					return fmt.Errorf("failed to roundtrip request: %w", err)
 				}

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -28,9 +29,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/types"
 
+	reqcommon "sigs.k8s.io/gateway-api-inference-extension/pkg/common/request"
 	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 	fwksched "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
-	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
 	latencypredictor "sigs.k8s.io/gateway-api-inference-extension/sidecars/latencypredictorasync"
 	"sigs.k8s.io/gateway-api-inference-extension/test/utils"
 )
@@ -120,8 +121,27 @@ func createTestEndpoint(name string, kvCacheUsage float64, runningRequestsSize, 
 }
 
 func createTestLLMRequest(reqID string, ttftSLO, tpotSLO float64) *fwksched.LLMRequest {
+	return createTestLLMRequestWithBody(reqID, ttftSLO, tpotSLO, &fwksched.LLMRequestBody{
+		Completions: &fwksched.CompletionsRequest{
+			Prompt: fwksched.Prompt{Raw: "test prompt"},
+		},
+	})
+}
+
+func createTestChatCompletionsLLMRequest(reqID string, ttftSLO, tpotSLO float64) *fwksched.LLMRequest {
+	return createTestLLMRequestWithBody(reqID, ttftSLO, tpotSLO, &fwksched.LLMRequestBody{
+		ChatCompletions: &fwksched.ChatCompletionsRequest{
+			Messages: []fwksched.Message{
+				{Role: "system", Content: fwksched.Content{Raw: "You are a helpful assistant."}},
+				{Role: "user", Content: fwksched.Content{Raw: "Tell me a joke."}},
+			},
+		},
+	})
+}
+
+func createTestLLMRequestWithBody(reqID string, ttftSLO, tpotSLO float64, body *fwksched.LLMRequestBody) *fwksched.LLMRequest {
 	headers := make(map[string]string)
-	headers[requtil.RequestIdHeaderKey] = reqID
+	headers[reqcommon.RequestIdHeaderKey] = reqID
 	if ttftSLO > 0 {
 		headers["x-ttft-slo"] = fmt.Sprintf("%f", ttftSLO)
 	}
@@ -131,11 +151,7 @@ func createTestLLMRequest(reqID string, ttftSLO, tpotSLO float64) *fwksched.LLMR
 
 	return &fwksched.LLMRequest{
 		Headers: headers,
-		Body: &fwksched.LLMRequestBody{
-			Completions: &fwksched.CompletionsRequest{
-				Prompt: "test prompt",
-			},
-		},
+		Body:    body,
 	}
 }
 
@@ -175,7 +191,7 @@ func setupPredictionContext(router *PredictedLatency, request *fwksched.LLMReque
 	}
 
 	// Store the context using the request ID
-	reqID := request.Headers[requtil.RequestIdHeaderKey]
+	reqID := request.Headers[reqcommon.RequestIdHeaderKey]
 	router.sloContextStore.Set(reqID, predictedLatencyCtx, ttlcache.DefaultTTL)
 }
 
@@ -277,6 +293,22 @@ func TestPredictedLatency_Score(t *testing.T) {
 			request:   createTestLLMRequest("test", 1.0, 0.05),
 			endpoints: []fwksched.Endpoint{},
 			// Should return empty scores map
+			expectedScores: map[string]float64{},
+		},
+		{
+			name: "Chat completions request does not panic",
+			predictor: &mockPredictor{
+				predictions: map[string]*latencypredictor.PredictionResponse{
+					"0.5": {TTFT: 0.5, TPOT: 0.03},
+					"0.6": {TTFT: 0.6, TPOT: 0.04},
+				},
+			},
+			strategy: headroomStrategyLeast,
+			request:  createTestChatCompletionsLLMRequest("test-chat", 1.0, 0.05),
+			endpoints: []fwksched.Endpoint{
+				createTestEndpoint("pod1", 0.5, 2, 1),
+				createTestEndpoint("pod2", 0.6, 3, 2),
+			},
 			expectedScores: map[string]float64{},
 		},
 	}
@@ -398,7 +430,7 @@ func TestPredictedLatency_Strategies(t *testing.T) {
 					selectedCount++
 				}
 			}
-			assert.Equal(t, 1, selectedCount, "Strategy %s should select exactly one pod", tt.strategy)
+			assert.Equal(t, 1, selectedCount, "strategy %s should select exactly one pod", tt.strategy)
 		})
 	}
 }
@@ -741,7 +773,7 @@ func TestSloContextStoreEviction(t *testing.T) {
 
 	req := &fwksched.LLMRequest{
 		Headers: map[string]string{
-			requtil.RequestIdHeaderKey: requestID,
+			reqcommon.RequestIdHeaderKey: requestID,
 		},
 	}
 
@@ -767,4 +799,53 @@ func TestSloContextStoreEviction(t *testing.T) {
 	item = pl.sloContextStore.Get(requestID)
 	assert.Nil(t, item, "Item should have been evicted from cache")
 	assert.False(t, queue.Contains(requestID), "Request should be removed from queue via OnEviction")
+}
+
+// TestCompositeLeastVsMost_NegativeHeadroom verifies that composite-least and
+// composite-most produce different endpoint selections when endpoints have
+// clearly different composite scores. This catches the copy-paste bug where
+// selectFromNegativeHeadroomEndpointsInternal passes the wrong strategy.
+func TestCompositeLeastVsMost_NegativeHeadroom(t *testing.T) {
+	// Two endpoints with very different KV cache usage so their composite
+	// scores diverge significantly.
+	//   podLow:  10% KV usage → 90% free → high composite weight
+	//   podHigh: 90% KV usage → 10% free → low composite weight
+	podLow := createTestEndpoint("pod-low-kv", 0.1, 1, 0)
+	podHigh := createTestEndpoint("pod-high-kv", 0.9, 1, 0)
+
+	candidates := []endpointPredictionResult{
+		{Endpoint: podLow, Headroom: -0.5, TTFTHeadroom: -0.5, IsValid: true},
+		{Endpoint: podHigh, Headroom: -0.3, TTFTHeadroom: -0.3, IsValid: true},
+	}
+
+	// Use "max" selection mode so the result is deterministic (always picks
+	// the endpoint with the highest weight, no randomness).
+	cfgMost := DefaultConfig
+	cfgMost.HeadroomSelectionStrategy = string(headroomStrategyCompositeMost)
+	cfgMost.SelectionMode = string(podSelectionMax)
+	routerMost := NewPredictedLatency(cfgMost, nil)
+
+	cfgLeast := DefaultConfig
+	cfgLeast.HeadroomSelectionStrategy = string(headroomStrategyCompositeLeast)
+	cfgLeast.SelectionMode = string(podSelectionMax)
+	routerLeast := NewPredictedLatency(cfgLeast, nil)
+
+	ctx := context.Background()
+	rng := rand.New(rand.NewSource(42))
+
+	selectedMost := routerMost.selectFromNegativeHeadroomEndpointsInternal(ctx, candidates, rng)
+	selectedLeast := routerLeast.selectFromNegativeHeadroomEndpointsInternal(ctx, candidates, rng)
+
+	assert.NotNil(t, selectedMost)
+	assert.NotNil(t, selectedLeast)
+
+	// composite-most should prefer higher composite score (pod-low-kv has
+	// more free KV cache → higher weight).
+	assert.Equal(t, "pod-low-kv", selectedMost.GetMetadata().NamespacedName.Name,
+		"composite-most should prefer the endpoint with more free KV cache")
+
+	// composite-least inverts the weights, so it should prefer the endpoint
+	// with the lower composite score (pod-high-kv has less free KV cache).
+	assert.Equal(t, "pod-high-kv", selectedLeast.GetMetadata().NamespacedName.Name,
+		"composite-least should prefer the endpoint with less free KV cache")
 }
