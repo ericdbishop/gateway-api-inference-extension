@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/types"
-	gwhttp "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/http"
+	gwhttp "sigs.k8s.io/gateway-api/conformance/utils/http"
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
 	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
