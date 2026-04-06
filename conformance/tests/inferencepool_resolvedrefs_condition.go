@@ -112,7 +112,7 @@ var InferencePoolResolvedRefsCondition = suite.ConformanceTest{
 		})
 
 		t.Run("Delete httproute-for-primary-gw and verify InferencePool status and routing via secondary gw", func(t *testing.T) {
-			gatewayk8sutils.DeleteHTTPRoute(t, s.Client, httpRoutePrimaryNN) 
+			gatewayk8sutils.DeleteHTTPRoute(t, s.Client, httpRoutePrimaryNN)
 
 			t.Logf("Waiting for %v for Gateway conditions to update after deleting HTTPRoute %s", inferenceTimeoutConfig.HTTPRouteDeletionReconciliationTimeout, httpRoutePrimaryNN.String())
 			time.Sleep(inferenceTimeoutConfig.HTTPRouteDeletionReconciliationTimeout)
@@ -156,7 +156,7 @@ var InferencePoolResolvedRefsCondition = suite.ConformanceTest{
 		})
 
 		t.Run("Delete httproute-for-secondary-gw and verify InferencePool has no parent statuses and is not routable", func(t *testing.T) {
-			gatewayk8sutils.DeleteHTTPRoute(t, s.Client, httpRouteSecondaryNN) 
+			gatewayk8sutils.DeleteHTTPRoute(t, s.Client, httpRouteSecondaryNN)
 
 			t.Logf("Waiting for %v for Gateway conditions to update after deleting HTTPRoute %s", inferenceTimeoutConfig.HTTPRouteDeletionReconciliationTimeout, httpRouteSecondaryNN.String())
 			time.Sleep(inferenceTimeoutConfig.HTTPRouteDeletionReconciliationTimeout)
