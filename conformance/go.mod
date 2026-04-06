@@ -4,16 +4,12 @@ go 1.25.0
 
 replace sigs.k8s.io/gateway-api-inference-extension => ../
 
-replace sigs.k8s.io/gateway-api => /Users/eric/gateway-api
-
-replace sigs.k8s.io/gateway-api/conformance => /Users/eric/gateway-api/conformance
-
 replace cloud.google.com/go/storage => cloud.google.com/go/storage v1.59.2
 
 require (
-	sigs.k8s.io/gateway-api v1.5.1
+	sigs.k8s.io/gateway-api v0.0.0-20260406183130-ace5815870c6
 	sigs.k8s.io/gateway-api-inference-extension v0.0.0-00010101000000-000000000000
-	sigs.k8s.io/gateway-api/conformance v1.5.1
+	sigs.k8s.io/gateway-api/conformance v0.0.0-20260406183130-ace5815870c6
 )
 
 require (
@@ -63,12 +59,12 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.42.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/term v0.40.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.14.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/term v0.41.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260209200024-4cfbd4190f57 // indirect
 	google.golang.org/grpc v1.79.3 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
