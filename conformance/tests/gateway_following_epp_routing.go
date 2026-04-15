@@ -29,10 +29,9 @@ import (
 	gwhttp "sigs.k8s.io/gateway-api/conformance/utils/http"
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
+	"sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
-	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/test"
 )
@@ -46,9 +45,9 @@ var GatewayFollowingEPPRouting = suite.ConformanceTest{
 	ShortName:   "GatewayFollowingEPPRouting",
 	Description: "Inference gateway should send traffic to an endpoint in the list returned by EPP",
 	Manifests:   []string{"tests/gateway_following_epp_routing.yaml"},
-	Features: []gatewayfeatures.FeatureName{
-		features.SupportInferencePool,
-		gatewayfeatures.SupportGateway,
+	Features: []features.FeatureName{
+		features.FeatureName("SupportInferencePool"),
+		features.SupportGateway,
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		const (

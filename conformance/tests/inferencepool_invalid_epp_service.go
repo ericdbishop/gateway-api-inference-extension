@@ -25,11 +25,10 @@ import (
 	gwhttp "sigs.k8s.io/gateway-api/conformance/utils/http"
 	"sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
+	"sigs.k8s.io/gateway-api/pkg/features"
 
 	inferenceapi "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
-	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 )
 
@@ -41,10 +40,10 @@ var InferencePoolInvalidEPPService = suite.ConformanceTest{
 	ShortName:   "InferencePoolInvalidEPPService",
 	Description: "An HTTPRoute that references an InferencePool with a non-existent EPP service should have a ResolvedRefs condition with a status of False and a reason of BackendNotFound.",
 	Manifests:   []string{"tests/inferencepool_invalid_epp_service.yaml"},
-	Features: []gatewayfeatures.FeatureName{
-		gatewayfeatures.SupportGateway,
-		gatewayfeatures.SupportHTTPRoute,
-		features.SupportInferencePool,
+	Features: []features.FeatureName{
+		features.SupportGateway,
+		features.SupportHTTPRoute,
+		features.FeatureName("SupportInferencePool"),
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		const routePath = "/invalid-epp-test"

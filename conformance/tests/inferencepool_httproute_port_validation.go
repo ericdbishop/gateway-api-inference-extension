@@ -24,10 +24,9 @@ import (
 	gwhttp "sigs.k8s.io/gateway-api/conformance/utils/http"
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
+	"sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
-	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 )
 
@@ -39,9 +38,9 @@ var InferencePoolHTTPRoutePortValidation = suite.ConformanceTest{
 	ShortName:   "InferencePoolHTTPRoutePortValidation",
 	Description: "Validates HTTPRoute backendRef port configurations (unspecified, matching, non-matching) when referencing an InferencePool, and checks resulting status conditions.",
 	Manifests:   []string{"tests/inferencepool_httproute_port_validation.yaml"},
-	Features: []gatewayfeatures.FeatureName{
-		features.SupportInferencePool,
-		gatewayfeatures.SupportGateway,
+	Features: []features.FeatureName{
+		features.FeatureName("SupportInferencePool"),
+		features.SupportGateway,
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		gatewayNN := resources.PrimaryGatewayNN

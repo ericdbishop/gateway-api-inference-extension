@@ -21,10 +21,9 @@ import (
 
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
+	"sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
-	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 )
 
@@ -37,9 +36,9 @@ var InferencePoolAccepted = suite.ConformanceTest{
 	ShortName:   "InferencePoolAccepted",
 	Description: "A minimal InferencePool resource should be accepted by the controller and report an Accepted condition",
 	Manifests:   []string{"tests/inferencepool_accepted.yaml"},
-	Features: []gatewayfeatures.FeatureName{
-		features.SupportInferencePool,
-		gatewayfeatures.SupportGateway,
+	Features: []features.FeatureName{
+		features.FeatureName("SupportInferencePool"),
+		features.SupportGateway,
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		poolNN := resources.PrimaryInferencePoolNN

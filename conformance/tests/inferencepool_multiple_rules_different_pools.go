@@ -22,10 +22,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	gwhttp "sigs.k8s.io/gateway-api/conformance/utils/http"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
+	"sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
-	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 )
 
@@ -37,10 +36,10 @@ var HTTPRouteMultipleRulesDifferentPools = suite.ConformanceTest{
 	ShortName:   "HTTPRouteMultipleRulesDifferentPools",
 	Description: "An HTTPRoute with two rules routing to two different InferencePools",
 	Manifests:   []string{"tests/inferencepool_multiple_rules_different_pools.yaml"},
-	Features: []gatewayfeatures.FeatureName{
-		gatewayfeatures.SupportGateway,
-		gatewayfeatures.SupportHTTPRoute,
-		features.SupportInferencePool,
+	Features: []features.FeatureName{
+		features.SupportGateway,
+		features.SupportHTTPRoute,
+		features.FeatureName("SupportInferencePool"),
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		const (

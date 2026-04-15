@@ -31,10 +31,9 @@ import (
 	gwhttp "sigs.k8s.io/gateway-api/conformance/utils/http"
 	gatewayk8sutils "sigs.k8s.io/gateway-api/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api/conformance/utils/suite"
-	gatewayfeatures "sigs.k8s.io/gateway-api/pkg/features"
+	"sigs.k8s.io/gateway-api/pkg/features"
 
 	"sigs.k8s.io/gateway-api-inference-extension/conformance/resources"
-	"sigs.k8s.io/gateway-api-inference-extension/conformance/utils/features"
 	k8sutils "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/kubernetes"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/test"
 )
@@ -50,9 +49,9 @@ var GatewayWeightedAcrossTwoInferencePools = suite.ConformanceTest{
 	ShortName:   "GatewayWeightedAcrossTwoInferencePools",
 	Description: "Gateway should split traffic across two InferencePools based on backendRef weights and route only to endpoints of the selected InferencePool",
 	Manifests:   []string{"tests/gateway_weighted_two_pools.yaml"},
-	Features: []gatewayfeatures.FeatureName{
-		features.SupportInferencePool,
-		gatewayfeatures.SupportGateway,
+	Features: []features.FeatureName{
+		features.SupportGateway,
+		features.FeatureName("SupportInferencePool"),
 	},
 	Test: func(t *testing.T, s *suite.ConformanceTestSuite) {
 		const (
